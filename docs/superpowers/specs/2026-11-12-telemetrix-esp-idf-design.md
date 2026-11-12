@@ -1,10 +1,9 @@
 # telemetrix-esp-idf: a modular Telemetrix server for ESP-IDF and its Python client: design
 
-Status: for the user's review, 2026-11-12. Agreed with the user in brainstorms on 2026-11-10 and 2026-11-12 (held in
-the esp32-otbr project, whose header I/O design is the first consumer). Moved here on 2026-11-12 as revision 2, to be
-built from scratch in this repository. An earlier implementation of revision 1 (`~/dev/telemetrix-esp32-idf`, never
-published, never on a board) may be read for reference; nothing is carried over wholesale. Two deliverables: the ESP-IDF
-component (section 4) and the Python client in `client/` (section 5).
+Status: for the user's review, 2026-11-12. A standalone project, built from scratch in this repository. An earlier
+implementation of a first revision (`~/dev/telemetrix-esp32-idf`, never published, never on a board) may be read for
+reference; nothing is carried over wholesale. Two deliverables: the ESP-IDF component (section 4) and the Python client
+in `client/` (section 5).
 
 ## 1. Intent
 
@@ -12,12 +11,12 @@ component (section 4) and the Python client in `client/` (section 5).
 
 ESP32 boards often have spare GPIO headers. The user wants to drive miscellaneous devices wired to them (relays,
 motors, buttons, sensors, serial devices such as a GPS receiver or a Modbus RS485 adapter) from software running
-elsewhere on the network. The first consumer is the esp32-otbr firmware on the Waveshare ESP32-P4-WIFI6-POE-ETH, whose
-Raspberry-Pi-style 40-pin header is otherwise unused, with mqtt.io as the first application on the network side.
+elsewhere on the network, with mqtt.io as the first application on the network side. Any ESP-IDF application can embed
+the component next to its own work.
 
 ### Why Telemetrix
 
-Compared in the brainstorm (sources in section 9):
+Compared in the brainstorm (sources in section 8):
 
 - **pigpio** (what gpiozero uses remotely): no release since March 2021; edge timestamps only, so DHT, HC-SR04 and
   1-wire would need microsecond timing across the network.
@@ -82,7 +81,7 @@ Anti-goals (a failure even if it works):
   `telemetrix_`, internal `tmx_`, `esp_err_t`, host tests on the IDF `linux` target with Unity; for `client/`, ruff and
   pytest.
 - No dynamic pin knowledge outside the profile; no fixed arrays indexed by an unchecked number from the wire.
-- lwIP sockets are a shared, small budget in applications like esp32-otbr: the component publishes how many it needs
+- lwIP sockets are a shared, small budget in embedding applications: the component publishes how many it needs
   (main listener and client, two per stream, two per bridge) so the application can size lwIP.
 - Internal RAM is scarce on some targets: buffers go to PSRAM where the application enables it and latency allows.
 - Hardware verification happens on spare boards (Olimex ESP32-POE, ESP32-S3, ESP32-C6) in batched passes after review,
@@ -141,7 +140,8 @@ at once, the connect timeout (default 10 s) and the largest SPI frame (default 4
 
 **Hooks** (callbacks the application registers):
 
-- `access`: decides whether a connecting peer is allowed (esp32-otbr plugs its netcfg rules in here). Applies to every socket the
+- `access`: decides whether a connecting peer is allowed (for example the application's own firewall rules).
+  Applies to every socket the
   library or a plugin accepts.
 - `reset`: called on the RESET command. Default: release every pin and bus and stop all reports; never reboots unless
   the application's hook does.
@@ -263,7 +263,7 @@ Data on the side connection:
   the stream) and is counted.
 
 The library also offers the application fixed UART bridges (a UART served raw on its own TCP port with no Telemetrix
-client, used by esp32-otbr for gpsd and Modbus); they share the UART serving code with UART streams and the rule that
+client, for tools like gpsd or a Modbus master); they share the UART serving code with UART streams and the rule that
 one UART has one user.
 
 ### 4.6 Plugin API (firmware side)
@@ -297,7 +297,7 @@ one UART has one user.
   and 26, the only DAC pins. The DAC test needs the Wi-Fi build and those pins on a header; otherwise DAC is covered by
   host tests only.
 - Second target: an ESP32-S3 dev board over Wi-Fi. The C6 example build is a compile check. All of this runs on spare
-  boards, not the P4.
+  boards.
 - Streams and the extended protocol on a spare board, driven by our client (section 5): a UART stream through a
   TX↔RX loopback wire and an SPI stream through a MOSI↔MISO loopback wire, checked byte for byte.
 
@@ -312,7 +312,7 @@ awesome version of the Telemetrix protocol client that supports extensions".
   (import `telemetrix_idf`), settled with the courtesy check (section 7). (Claude's call.)
 - asyncio at the core, because mqtt.io is asyncio and its module will sit directly on top; a thin synchronous wrapper
   for scripts and notebooks. Python version floor: builder's call (the oldest one mqtt.io supports, at least 3.10).
-- Order: after the component's wire contract is fixed (section 4); in parallel with the esp32-otbr integration.
+- Order: after the component's wire contract is fixed (section 4).
 
 ### 5.2 Behaviour
 
@@ -409,22 +409,14 @@ contacts the author (Claude does not send messages on their behalf). (Claude's c
 
 - Contact the Telemetrix author (Alan Yorinks, MrYsLab) before publishing under a name that contains "Telemetrix":
   ask whether the name is fine (for the library and for our client), whether the extensions (handshake, discovery,
-  bus numbers, plugin envelope) could become part of the protocol or get reserved ids, and whether a P4-aware pin list
+  bus numbers, plugin envelope) could become part of the protocol or get reserved ids, and whether pin lists for newer chips
   in the Python client would be welcome. Their answer may change the names, the new ids and the firmware version
   scheme.
-- Upstream bugs found while reading (section 9 has the details): the SPI init layout mismatch, the
+- Upstream bugs found while reading (section 8 has the details): the SPI init layout mismatch, the
   `restart_on_shutdown` tuple bug, 1-wire subtype constants in the client docs, the client's off-by-one sonar and DHT
   limits, and the server overflows. These can be reported upstream; not a v1 deliverable.
 
-## 8. First consumer: esp32-otbr
-
-The esp32-otbr firmware integrates the component for the P4 board's 40-pin header: a GPIO page with per-pin
-assignment, fixed header UARTs as TCP serial ports (through the component's UART bridges), its netcfg rules in the
-`access` hook, and the maintenance jumper turned into a setting. That design lives in the esp32-otbr repository
-(`docs/superpowers/specs/2026-11-10-header-io-design.md`) and consumes only this component's public API. During
-development it pulls the component through `override_path` to a local checkout.
-
-## 9. Sources
+## 8. Sources
 
 - Telemetrix4Esp32 server sketch, 3.2.0:
   https://github.com/MrYsLab/Telemetrix4Esp32 (`examples/Telemetrix4Esp32WIFI/Telemetrix4Esp32WIFI.ino`)
@@ -436,4 +428,3 @@ development it pulls the component through `override_path` to a local checkout.
 - Alternatives compared: pigpio https://github.com/joan2937/pigpio, lg/rgpiod https://github.com/joan2937/lg,
   ConfigurableFirmata https://github.com/firmata/ConfigurableFirmata, Linux greybus
   https://github.com/torvalds/linux/tree/master/drivers/greybus, gbridge https://github.com/anobli/gbridge
-- First consumer: esp32-otbr (Waveshare ESP32-P4-WIFI6-POE-ETH), design `docs/superpowers/specs/2026-11-10-header-io-design.md` in that repository.
