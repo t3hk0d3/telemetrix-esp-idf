@@ -26,12 +26,14 @@ static const char *const fail_ops[] = {
     "i2c_write", "ow_open", "dht_start", "sonar_start",
 };
 
+static size_t report_max;      /* TMX_REPORT_MAX for a stock-only input; extended reports reach 255 bytes */
+
 static void emit(const uint8_t *report, size_t n, bool reply, int8_t kind, uint16_t key, void *ctx)
 {
     (void)reply;
     (void)kind;
     (void)key;
-    if (n < 2 || n > TMX_EXT_REPORT_MAX - 1 || report[0] != n - 1) {
+    if (n < 2 || n > report_max || report[0] != n - 1) {
         abort();
     }
     volatile uint8_t sink = 0;
@@ -83,6 +85,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     };
     tmx_fake_reset();
     tmx_completion_reset();
+    report_max = cfg.extended ? TMX_EXT_REPORT_MAX - 1 : TMX_REPORT_MAX;
     if (tmx_adapter_init(&a, &profile, &cfg, &tmx_drv_fake, emit, &emitted) != ESP_OK) {
         abort();
     }

@@ -604,6 +604,8 @@ TEST_CASE("net (extended) on a handshake then 200 bytes of a 254-byte command in
     for (int i = 0; i < 251; i++) {
         cmd[4 + i] = (uint8_t)i;
     }
+    /* the handshake and the 254 length byte arrive in the same recv (RECV_CHUNK 128): the frame must take the
+     * extended cap from inside the packet callback, before it reads that length byte */
     TEST_ASSERT_EQUAL(sizeof(ext_hello) + 200, send(c, chunk, sizeof(ext_hello) + 200, 0));
     settle();
     TEST_ASSERT_EQUAL(55, send(c, cmd + 200, 55, 0));
@@ -862,5 +864,71 @@ TEST_CASE("status with test.echo after an emit_async on a full ring: async_dropp
     vTaskPrioritySet(NULL, prio);
     TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM, last);
     TEST_ASSERT_TRUE(wait_for(status_async_dropped));
+    stop_and_close(c);
+}
+
+TEST_CASE("telemetrix_start with extended on and a send queue under 512 bytes: ESP_ERR_INVALID_ARG, nothing started",
+          "[server]")
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.send_queue_bytes = 2 * TMX_EXT_REPORT_MAX - 1;
+    (void)telemetrix_stop();
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, telemetrix_start(&profile, &cfg, NULL));
+    telemetrix_status_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
+    TEST_ASSERT_FALSE(st.running);
+}
+
+TEST_CASE("telemetrix_start with extended on and a send queue of 512 bytes: ESP_OK", "[server]")
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.send_queue_bytes = 2 * TMX_EXT_REPORT_MAX;
+    (void)telemetrix_stop();
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_start(&profile, &cfg, NULL));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("telemetrix_start with extended off and a send queue of 64 bytes: ESP_OK", "[server]")
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.extended = false;
+    cfg.send_queue_bytes = TMX_REPORT_MAX;
+    (void)telemetrix_stop();
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_start(&profile, &cfg, NULL));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on an emit_async queued before a RESET: the PLUGIN_REPORT is dropped", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t echo[] = {3, TMX_CMD_PLUGIN, 0, 0};
+    TEST_ASSERT_EQUAL(sizeof(echo), send(c, echo, sizeof(echo), 0));
+    uint8_t got[4];
+    TEST_ASSERT_EQUAL(0, read_n(c, got, sizeof(got)));
+    /* above the network task's priority: the entry and the RESET are both waiting when the task next runs, and it
+     * reads before it drains */
+    const uint8_t reset_loop[] = {1, TMX_CMD_RESET, 2, TMX_CMD_LOOP_COMMAND, 0x5a};
+    UBaseType_t prio = uxTaskPriorityGet(NULL);
+    vTaskPrioritySet(NULL, configMAX_PRIORITIES - 1);
+    esp_err_t put = telemetrix_plugin_emit_async(test_plugin_ctx(), 0, NULL, 0);
+    ssize_t sent = send(c, reset_loop, sizeof(reset_loop), 0);
+    vTaskPrioritySet(NULL, prio);
+    TEST_ASSERT_EQUAL(ESP_OK, put);
+    TEST_ASSERT_EQUAL(sizeof(reset_loop), sent);
+    const uint8_t loop2[] = {2, TMX_CMD_LOOP_COMMAND, 0x5b};
+    TEST_ASSERT_EQUAL(0, read_n(c, got, 3));
+    TEST_ASSERT_EQUAL(sizeof(loop2), send(c, loop2, sizeof(loop2), 0));
+    TEST_ASSERT_EQUAL(0, read_n(c, got, 3));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(loop2, got, 3);               /* the second LOOP's reply, nothing in between */
     stop_and_close(c);
 }

@@ -34,7 +34,8 @@ static void on_status(int sig)
 
 static void usage(const char *why)
 {
-    fprintf(stderr, "%s\nusage: host_server --port N [--allow CIDR]... [--stall-ms N] [--stock-only] [--test-plugin]\n", why);
+    fprintf(stderr, "%s\nusage: host_server --port N [--allow CIDR]... [--stall-ms N] [--stock-only] "
+            "[--test-plugin]\n", why);
     exit(2);
 }
 
@@ -87,7 +88,8 @@ static void print_status(void)
                "coalesced_reports=%u stalled_clients=%u ledc_attach=%u ledc_duty=%u extended=%d protocol_violations=%u "
                "error_reports=%u\n", st.client[0] ? st.client : "-",
                (unsigned)st.refused_connections, (unsigned)st.dropped_packets, (unsigned)st.ignored_commands,
-               (unsigned)st.refused_commands, (unsigned)st.coalesced_reports, (unsigned)st.stalled_clients, (unsigned)tmx_fake_count("ledc_attach"),
+               (unsigned)st.refused_commands, (unsigned)st.coalesced_reports, (unsigned)st.stalled_clients,
+               (unsigned)tmx_fake_count("ledc_attach"),
                (unsigned)tmx_fake_count("ledc_duty"), st.extended ? 1 : 0, (unsigned)st.protocol_violations,
                (unsigned)st.error_reports);
         fflush(stdout);

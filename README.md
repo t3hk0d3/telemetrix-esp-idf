@@ -91,7 +91,7 @@ The stock client's `set_pin_mode_i2c()` always sends a bare `I2C_BEGIN`, so a pr
 | `port` | 31336 |
 | `keepalive_idle_s`, `keepalive_intvl_s`, `keepalive_count` | 10 s, 2 s, 3 |
 | `send_stall_ms` | 10000 |
-| `send_queue_bytes` | 4096 |
+| `send_queue_bytes` | 4096; at least 64, and at least 512 (two of the largest extended reports) while `extended` is on with `CONFIG_TELEMETRIX_EXTENDED`, else `telemetrix_start` returns `ESP_ERR_INVALID_ARG` |
 | `i2c_timeout_ms` | 50 |
 | `analog_interval_floor_ms` | 10 |
 | `max_dht`, `max_sonar`, `max_servo` | 6, 6, 4 (servos never more than the free LEDC channels) |
@@ -114,9 +114,9 @@ slot, `commands`, `refusals`, `overruns`, `max_us`, `async_dropped` and its stat
 the current client.
 
 **Build switches** (menuconfig, "Telemetrix"): `CONFIG_TELEMETRIX_DHT`, `_SONAR`, `_ONE_WIRE`, `_SERVO`, `_I2C`,
-`_ANALOG`, `_EXTENDED` (the extended protocol and plugins), each on by default. The commands of a switched-off feature are ignored and counted in `ignored_commands`,
-like an id out of scope: DHT `DHT_NEW` (13), sonar `SONAR_NEW` (12), 1-wire ids 27-35, servo ids 6-8, I2C ids 9-11,
-analog `SET_PIN_MODE` mode 3.
+`_ANALOG`, `_EXTENDED` (the extended protocol and plugins), each on by default. The commands of a switched-off feature
+are ignored and counted in `ignored_commands`, like an id out of scope: DHT `DHT_NEW` (13), sonar `SONAR_NEW` (12),
+1-wire ids 27-35, servo ids 6-8, I2C ids 9-11, analog `SET_PIN_MODE` mode 3.
 
 ## The stock protocol
 
@@ -282,8 +282,8 @@ LIMIT kinds, computed from the grants:
 | 6 | analog interval floor, ms | `analog_interval_floor_ms` |
 
 **Plugins** (`include/telemetrix_plugin.h`). A plugin is trusted application code registered through
-`config.plugins` (at most `TELEMETRIX_PLUGINS_MAX`, 8); its slot is its index there. A client in extended mode reaches it
-with `PLUGIN [slot, sub, args...]`, and the plugin answers with PLUGIN_REPORT. In stock mode plugins are unreachable.
+`config.plugins` (at most `TELEMETRIX_PLUGINS_MAX`, 8); its slot is its index there. A client in extended mode reaches
+it with `PLUGIN [slot, sub, args...]`, and the plugin answers with PLUGIN_REPORT. In stock mode plugins are unreachable.
 
 - Names match `^[a-z0-9_]+\.[a-z0-9_.]+$`, at most 32 bytes, unique; the `telemetrix.` prefix is reserved for
   built-ins (there are none yet).

@@ -82,7 +82,12 @@ static esp_err_t check_config(const telemetrix_config_t *c)
             (c->n_plugins > 0 && !c->plugins)) {
         return ESP_ERR_INVALID_ARG;
     }
-#ifndef CONFIG_TELEMETRIX_EXTENDED
+#ifdef CONFIG_TELEMETRIX_EXTENDED
+    /* a reply that fits nowhere drops the client: two of the largest extended reports must fit */
+    if (c->extended && c->send_queue_bytes < 2 * TMX_EXT_REPORT_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+#else
     if (c->n_plugins > 0) {
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -303,6 +308,7 @@ static void packet_cb(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
      * its numbering continue) and every RESET calls the hook */
     if (tmx_adapter_reset_requested(&s->adapter)) {
         tmx_completion_reset();         /* the adapter has released: stale completions must not meet the next session */
+        tmx_emit_ring_bump(true);       /* async reports queued before the RESET are dropped; the ring stays open */
         if (s->hooks.reset) {
             s->hooks.reset(s->hooks.ctx);
         }
