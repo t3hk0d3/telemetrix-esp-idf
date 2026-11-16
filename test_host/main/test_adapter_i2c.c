@@ -1,7 +1,14 @@
+#include <stdio.h>
+
 #include "adapter_fixture.h"
 
 static const telemetrix_i2c_bus_t fixed_bus = {.bus = 0, .port = 0, .sda = 21, .scl = 22, .speed_hz = 100000};
 static const telemetrix_i2c_bus_t choose_bus = {.bus = 0, .port = 0, .sda = -1, .scl = -1, .speed_hz = 100000};
+static int app_bus;     /* stands in for an application-owned i2c_master_bus_handle_t */
+/* Shared with the application: its pins (25, 26) are not profile pins. */
+static const telemetrix_i2c_bus_t shared_bus = {
+    .bus = 0, .port = 0, .sda = 25, .scl = 26, .speed_hz = 100000, .handle = &app_bus
+};
 
 static void start_open_fixed(void)
 {
@@ -252,4 +259,60 @@ TEST_CASE("Release with bus 0 never opened: no i2c_close", "[adapter]")
     fx_start_buses(&fixed_bus, NULL);
     tmx_adapter_release(&fx_a);
     TEST_ASSERT_EQUAL(0, tmx_fake_count("i2c_close"));
+}
+
+/* ---- an application-owned (shared) bus 0 ---- */
+
+/** True when a recorded gpio_* call names gpio as its first argument. */
+static bool gpio_touched(uint8_t gpio)
+{
+    char needle[24];
+    const char *ops[] = {"gpio_input(", "gpio_output(", "gpio_set("};
+    for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
+        snprintf(needle, sizeof(needle), "%s%u,", ops[i], gpio);
+        if (strstr(tmx_fake_calls(), needle)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+TEST_CASE("I2C_BEGIN on an application-owned bus 0: opened with the grant's handle, nothing claimed, no GPIO call",
+          "[adapter]")
+{
+    fx_start_buses(&shared_bus, NULL);
+    FX_SEND0(TMX_CMD_I2C_BEGIN, 0);
+    TEST_ASSERT_EQUAL(0, fx_refused());
+    TEST_ASSERT_EQUAL_STRING("i2c_open(0,25,26,app)\n", tmx_fake_calls());
+    telemetrix_pin_use_t uses[4];
+    TEST_ASSERT_EQUAL(0, tmx_adapter_pin_uses(&fx_a, uses, 4));
+}
+
+TEST_CASE("An application-owned bus 0 through a session: start, begin, read, write, RESET, release touch no bus pin",
+          "[adapter]")
+{
+    static const uint8_t regs[4] = {1, 2, 3, 4};
+    telemetrix_config_default(&fx_cfg);
+    tmx_fake_reset();
+    tmx_completion_reset();
+    fx_n_reports = 0;
+    fx_profile = (telemetrix_profile_t) {
+        .pins = fx_pins, .n_pins = sizeof(fx_pins) / sizeof(fx_pins[0]),
+        .ledc = {.speed_mode = 0, .timer_mask = 0x0f, .channel_mask = 0xff},
+        .adc = fx_adc, .n_adc = 1, .i2c = &shared_bus, .n_i2c = 1,
+    };
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate(&fx_profile));
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_adapter_init(&fx_a, &fx_profile, &fx_cfg, &tmx_drv_fake, fx_emit, NULL));  /* start */
+    tmx_fake_i2c_device(0, 0x76, regs, sizeof(regs));
+    FX_SEND0(TMX_CMD_I2C_BEGIN, 0);
+    FX_SEND(TMX_CMD_I2C_READ, 0, 0x76, 0, 2, 1);
+    FX_SEND(TMX_CMD_I2C_WRITE, 0, 1, 0x76, 0xAA);
+    FX_SEND0(TMX_CMD_RESET, 1);
+    FX_SEND0(TMX_CMD_I2C_BEGIN, 2);
+    tmx_adapter_release(&fx_a);
+    TEST_ASSERT_EQUAL(0, fx_refused());
+    TEST_ASSERT_EQUAL(2, tmx_fake_count("i2c_close"));
+    TEST_ASSERT_FALSE(gpio_touched(25));
+    TEST_ASSERT_FALSE(gpio_touched(26));
+    TEST_ASSERT_TRUE(gpio_touched(21));         /* the check does see gpio calls: start set the profile pins */
 }

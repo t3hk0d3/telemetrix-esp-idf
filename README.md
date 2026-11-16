@@ -67,14 +67,21 @@ RESET and `telemetrix_stop`. The component never calls `gpio_reset_pin` (it enab
 | `ledc` | `speed_mode`, `timer_mask`, `channel_mask`: the LEDC timers and channels PWM and servos may use. The channel the client names is ignored; channels and timers are allocated from the grant, timers shared by equal (frequency, resolution). No free channel or timer: refused. |
 | `rmt` | `rx_channels`, `tx_channels`: RMT channels the server may create for DHT and 1-wire. |
 | `adc[]` | One entry per ADC unit: `unit` and an optional application-owned `adc_oneshot_unit_handle_t` (NULL = the component makes its own). Channels the server reads are configured at 12 dB on every read. |
-| `i2c[]` | Buses: `bus`, `port`, `sda`, `scl` (-1 = the client chooses), `speed_hz`, optional application-owned `i2c_master_bus_handle_t`. A shared bus is never deleted by the component. |
+| `i2c[]` | Buses: `bus`, `port`, `sda`, `scl` (-1 = the client chooses), `speed_hz`, optional application-owned `i2c_master_bus_handle_t` (see below). |
 | `onewire[]` | Buses: `bus` and `gpio` (-1 = the pin of `ONE_WIRE_INIT`). |
 
 Stock commands always use bus 0 (I2C bus 0 and 1-wire bus 0). `I2C_BEGIN` pins are used only when bus 0's grant says
 "client chooses pins" (and must be profile pins with the I2C capability), otherwise they are ignored; `[0,0]` with
-"client chooses" is refused. The stock client's `set_pin_mode_i2c()` always sends a bare `I2C_BEGIN`, so a profile
-meant for it gives bus 0 fixed pins; the examples do (Olimex ESP32-POE: SDA GPIO13, SCL GPIO16 on UEXT; S3 DevKitC: 13,
-14; C6 DevKitC: 23, 22).
+"client chooses" is refused.
+
+**Shared I2C bus**: a bus grant with `handle` set is the application's bus. Its `sda` and `scl` must name the bus's pins
+and must not be profile pins; `telemetrix_start` refuses -1 or a profile pin with `ESP_ERR_INVALID_ARG`. `I2C_BEGIN`
+attaches to the handle; the component never claims, configures or puts those pins in a safe state (not at start, not on
+disconnect, RESET or stop) and never deletes the handle, only the device handles it added.
+
+The stock client's `set_pin_mode_i2c()` always sends a bare `I2C_BEGIN`, so a profile meant for it gives bus 0 fixed
+(or shared) pins; the examples do (Olimex ESP32-POE: SDA GPIO13, SCL GPIO16 on UEXT; S3 DevKitC: 13, 14; C6 DevKitC:
+23, 22).
 
 **Settings** (`telemetrix_config_default` fills every field; `telemetrix_config_t`):
 

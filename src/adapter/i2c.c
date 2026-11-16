@@ -32,6 +32,14 @@ static bool begin(tmx_adapter_t *a, const uint8_t *p, size_t len)
     if (a->i2c.open) {
         return true;
     }
+    if (grant->handle) {
+        /* shared with the application: its pins are not profile pins (validated), so nothing is claimed or driven */
+        if (a->drv->i2c_open(STOCK_BUS, grant, grant->sda, grant->scl) != ESP_OK) {
+            return false;
+        }
+        a->i2c.open = true;
+        return true;
+    }
     int sda = grant->sda;
     int scl = grant->scl;
     if (sda < 0 || scl < 0) {   /* the client chooses; [] and [0,0] name no pins */

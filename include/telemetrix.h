@@ -64,11 +64,16 @@ typedef struct {
     void *handle;
 } telemetrix_adc_grant_t;
 
+/** An I2C bus. With handle NULL the component creates the bus on port: sda and scl are fixed profile pins with the I2C
+ *  capability, or -1 for "the client chooses" (I2C_BEGIN names them).
+ *  With handle set the bus is shared with the application: sda and scl must name the bus's pins and must not be profile
+ *  pins (telemetrix_start refuses -1 or a profile pin with ESP_ERR_INVALID_ARG). I2C_BEGIN then attaches to the handle;
+ *  the component never claims, configures or puts those pins in a safe state, and never deletes the handle. */
 typedef struct {
     uint8_t bus;
     uint8_t port;
-    int8_t sda;                   /**< -1 = the client chooses */
-    int8_t scl;                   /**< -1 = the client chooses */
+    int8_t sda;                   /**< -1 = the client chooses (not with a handle) */
+    int8_t scl;                   /**< -1 = the client chooses (not with a handle) */
     uint32_t speed_hz;
     void *handle;                 /**< application-owned i2c_master_bus_handle_t, or NULL */
 } telemetrix_i2c_bus_t;

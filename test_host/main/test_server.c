@@ -314,3 +314,41 @@ TEST_CASE("RESET twice and a write in one send: the hook runs twice and the writ
     TEST_ASSERT_TRUE(wait_for(client_gone));
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
 }
+
+TEST_CASE("server with an application-owned I2C bus 0: start, a client reading it, disconnect and stop touch no bus pin",
+          "[server]")
+{
+    static int app_bus;
+    static const telemetrix_i2c_bus_t shared[] = {
+        {.bus = 0, .port = 0, .sda = 25, .scl = 26, .speed_hz = 100000, .handle = &app_bus}
+    };
+    telemetrix_profile_t with_bus = profile;
+    with_bus.i2c = shared;
+    with_bus.n_i2c = 1;
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    hook_reset = hook_connected = hook_disconnected = hook_access = 0;
+    access_allow = 1;
+    tmx_fake_reset();
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_start(&with_bus, &cfg, &hooks));
+    static const uint8_t regs[2] = {0x11, 0x22};
+    tmx_fake_i2c_device(0, 0x76, regs, sizeof(regs));
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    const uint8_t cmds[] = {1, 9, 5, 10, 0x76, 0, 2, 1};     /* I2C_BEGIN, I2C_READ 2 bytes of 0x76 from register 0 */
+    TEST_ASSERT_EQUAL(sizeof(cmds), send(c, cmds, sizeof(cmds), 0));
+    uint8_t reply[7];
+    TEST_ASSERT_EQUAL(0, read_n(c, reply, sizeof(reply)));
+    const uint8_t want[] = {6, 9, 2, 0x76, 0, 0x11, 0x22};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, reply, sizeof(want));
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+    TEST_ASSERT_TRUE(calls_have("i2c_open(0,25,26,app)"));
+    TEST_ASSERT_TRUE(calls_have("i2c_close(0)"));
+    TEST_ASSERT_TRUE(calls_have("gpio_output(2,1)"));          /* the log holds the start's safe states */
+    TEST_ASSERT_FALSE(calls_have("(25,"));
+    TEST_ASSERT_FALSE(calls_have("(26,"));
+}

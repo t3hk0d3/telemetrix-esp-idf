@@ -127,6 +127,52 @@ TEST_CASE("On an I2C bus with fixed pins that are not profile pins with the I2C 
     TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate(&p));
 }
 
+static int app_bus;     /* stands in for an application-owned i2c_master_bus_handle_t */
+
+TEST_CASE("On an application-owned I2C bus with sda or scl -1: ESP_ERR_INVALID_ARG", "[profile]")
+{
+    telemetrix_i2c_bus_t no_sda[] = {{.bus = 0, .sda = -1, .scl = 26, .handle = &app_bus}};
+    telemetrix_i2c_bus_t no_scl[] = {{.bus = 0, .sda = 25, .scl = -1, .handle = &app_bus}};
+    telemetrix_i2c_bus_t neither[] = {{.bus = 0, .sda = -1, .scl = -1, .handle = &app_bus}};
+    telemetrix_profile_t p = valid();
+    p.i2c = no_sda;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+    p.i2c = no_scl;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+    p.i2c = neither;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+}
+
+TEST_CASE("On an application-owned I2C bus whose sda or scl is a profile pin: ESP_ERR_INVALID_ARG", "[profile]")
+{
+    telemetrix_i2c_bus_t sda_in[] = {{.bus = 0, .sda = 21, .scl = 26, .handle = &app_bus}};
+    telemetrix_i2c_bus_t scl_in[] = {{.bus = 0, .sda = 25, .scl = 22, .handle = &app_bus}};
+    telemetrix_i2c_bus_t both_in[] = {{.bus = 0, .sda = 21, .scl = 22, .handle = &app_bus}};
+    telemetrix_profile_t p = valid();
+    p.i2c = sda_in;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+    p.i2c = scl_in;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+    p.i2c = both_in;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+}
+
+TEST_CASE("On an application-owned I2C bus with the same pin as sda and scl: ESP_ERR_INVALID_ARG", "[profile]")
+{
+    telemetrix_i2c_bus_t same[] = {{.bus = 0, .sda = 25, .scl = 25, .handle = &app_bus}};
+    telemetrix_profile_t p = valid();
+    p.i2c = same;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+}
+
+TEST_CASE("On an application-owned I2C bus with both pins outside the profile: ESP_OK", "[profile]")
+{
+    telemetrix_i2c_bus_t shared[] = {{.bus = 0, .sda = 25, .scl = 26, .handle = &app_bus}};
+    telemetrix_profile_t p = valid();
+    p.i2c = shared;
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate(&p));
+}
+
 TEST_CASE("On a fixed 1-wire gpio that is not a profile pin with the 1-wire capability: ESP_ERR_INVALID_ARG",
           "[profile]")
 {

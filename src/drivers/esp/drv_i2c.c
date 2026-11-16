@@ -43,10 +43,10 @@ esp_err_t esp_i2c_open(uint8_t bus, const telemetrix_i2c_bus_t *grant, int8_t sd
         return ESP_ERR_INVALID_STATE;
     }
     *b = (i2c_bus_t) {
-        .speed_hz = grant->speed_hz, .sda = sda, .scl = scl
+        .speed_hz = grant->speed_hz, .sda = -1, .scl = -1
     };
     if (grant->handle) {
-        b->bus = (i2c_master_bus_handle_t)grant->handle;
+        b->bus = (i2c_master_bus_handle_t)grant->handle;   /* the application's pins: not ours to touch, not even cached */
     } else {
         const i2c_master_bus_config_t cfg = {
             .i2c_port = grant->port,
@@ -62,12 +62,14 @@ esp_err_t esp_i2c_open(uint8_t bus, const telemetrix_i2c_bus_t *grant, int8_t sd
             return err;
         }
         b->owned = true;
-    }
-    if (sda >= 0) {
-        esp_gpio_forget((uint8_t)sda);
-    }
-    if (scl >= 0) {
-        esp_gpio_forget((uint8_t)scl);
+        b->sda = sda;
+        b->scl = scl;
+        if (sda >= 0) {
+            esp_gpio_forget((uint8_t)sda);
+        }
+        if (scl >= 0) {
+            esp_gpio_forget((uint8_t)scl);
+        }
     }
     b->open = true;
     return ESP_OK;

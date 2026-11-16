@@ -343,8 +343,7 @@ static esp_err_t f_adc_read(uint8_t unit, uint8_t channel, int *raw)
 
 static esp_err_t f_i2c_open(uint8_t bus, const telemetrix_i2c_bus_t *grant, int8_t sda, int8_t scl)
 {
-    (void)grant;
-    record("i2c_open(%u,%d,%d)", bus, sda, scl);
+    record(grant && grant->handle ? "i2c_open(%u,%d,%d,app)" : "i2c_open(%u,%d,%d)", bus, sda, scl);
     esp_err_t inj = injected("i2c_open");
     if (inj != ESP_OK) {
         return inj;

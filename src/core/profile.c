@@ -54,8 +54,14 @@ static esp_err_t validate_buses(const telemetrix_profile_t *p)
                 return ESP_ERR_INVALID_ARG;
             }
         }
-        if ((b->sda >= 0 && !has_pin_with_cap(p, b->sda, TELEMETRIX_CAP_I2C)) ||
-                (b->scl >= 0 && !has_pin_with_cap(p, b->scl, TELEMETRIX_CAP_I2C))) {
+        if (b->handle) {
+            /* shared with the application: both pins named, neither a profile pin, so nothing here ever drives them */
+            if (b->sda < 0 || b->scl < 0 || b->sda == b->scl || tmx_profile_pin(p, (uint8_t)b->sda) ||
+                    tmx_profile_pin(p, (uint8_t)b->scl)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+        } else if ((b->sda >= 0 && !has_pin_with_cap(p, b->sda, TELEMETRIX_CAP_I2C)) ||
+                   (b->scl >= 0 && !has_pin_with_cap(p, b->scl, TELEMETRIX_CAP_I2C))) {
             return ESP_ERR_INVALID_ARG;
         }
     }

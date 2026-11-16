@@ -13,7 +13,8 @@
 #define TMX_LEDC_TIMERS 8
 
 /** Check a profile: pins unique and at most 64, caps and safe states in range, ADC pins with a granted unit, LEDC grant
- *  usable by PWM pins, bus numbers unique, fixed bus pins profile pins with the capability. ESP_ERR_INVALID_ARG. */
+ *  usable by PWM pins, bus numbers unique, fixed bus pins profile pins with the capability, except an application-owned
+ *  I2C bus (handle set), which names two distinct pins that are not profile pins. ESP_ERR_INVALID_ARG. */
 esp_err_t tmx_profile_validate(const telemetrix_profile_t *p);
 /** The profile entry of a GPIO, or NULL. */
 const telemetrix_pin_t *tmx_profile_pin(const telemetrix_profile_t *p, uint8_t gpio);
