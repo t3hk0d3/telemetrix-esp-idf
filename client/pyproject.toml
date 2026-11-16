@@ -26,4 +26,7 @@ select = ["E", "F", "I", "B", "UP", "ASYNC"]
 [tool.pytest.ini_options]
 # strict: async tests carry an explicit pytest.mark.asyncio (STYLEGUIDE.md).
 asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+# The fakes in tests/ are imported by name.
+pythonpath = ["tests"]
 testpaths = ["tests/unit"]
