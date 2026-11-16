@@ -14,6 +14,7 @@ from fake_stock_server import FakeStockServer
 from telemetrix_idf import (
     Board,
     ChainError,
+    ConnectionLost,
     IncompatiblePlugin,
     NotSupported,
     PluginHalf,
@@ -110,9 +111,9 @@ async def test_plugin_board_lacks_raises_not_supported() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unregistered_half_raises_value_error() -> None:
+async def test_unregistered_half_raises_not_supported() -> None:
     async with ext(halves=()) as (_, board):
-        with pytest.raises(ValueError, match="connect"):
+        with pytest.raises(NotSupported, match="connect"):
             board.plugin("test.echo")
 
 
@@ -204,7 +205,7 @@ async def test_request_prefixes_args_with_request_id() -> None:
     async with ext() as (srv, board):
         await board.plugin("test.echo").request(0, b"\xaa")
         cmd, payload = next(p for p in srv.received if p[0] == 60)
-        assert payload == bytes([SLOT, 0, 0, 0, 0xAA])
+        assert payload == bytes([SLOT, 0, 0, 1, 0xAA])
 
 
 @pytest.mark.asyncio
@@ -231,7 +232,7 @@ async def test_request_completes_on_report_with_its_id_only() -> None:
         srv.push(plugin_report(SLOT, 2, b"\x00\x09\x55"))
         await asyncio.sleep(0.02)
         assert not task.done()
-        srv.push(plugin_report(SLOT, 2, b"\x00\x00\x55"))
+        srv.push(plugin_report(SLOT, 2, b"\x00\x01\x55"))
         assert await asyncio.wait_for(task, 1) == b"\x55"
 
 
@@ -256,3 +257,50 @@ async def test_request_refused_raises_chain_error() -> None:
     async with ext() as (_, board):
         with pytest.raises(ChainError):
             await board.plugin("test.echo").request(1, b"")
+
+
+@pytest.mark.asyncio
+async def test_request_first_id_is_1() -> None:
+    async with ext() as (srv, board):
+        await board.plugin("test.echo").request(0, b"")
+        assert [p[2:4] for c, p in srv.received if c == 60] == [b"\x00\x01"]
+
+
+@pytest.mark.asyncio
+async def test_request_report_with_its_id_on_another_sub_not_taken() -> None:
+    async with ext() as (srv, board):
+        half = board.plugin("test.echo")
+        task = asyncio.ensure_future(half.request(2, b""))
+        await _until(lambda: any(cmd == 60 for cmd, _ in srv.received))
+        srv.push(plugin_report(SLOT, 7, b"\x00\x01\x66"))
+        await _until(lambda: half.reports)
+        assert (half.reports[0][:2], task.done()) == ((7, b"\x00\x01\x66"), False)
+        srv.push(plugin_report(SLOT, 2, b"\x00\x01\x55"))
+        assert await asyncio.wait_for(task, 1) == b"\x55"
+
+
+@pytest.mark.asyncio
+async def test_request_late_report_after_timeout_goes_to_on_report() -> None:
+    async with ext(timeout=0.1) as (srv, board):
+        half = board.plugin("test.echo")
+        with pytest.raises(asyncio.TimeoutError):
+            await half.request(2, b"")
+        srv.push(plugin_report(SLOT, 2, b"\x00\x01\x55"))
+        await _until(lambda: half.reports)
+        assert half.reports[0][:2] == (2, b"\x00\x01\x55")
+
+
+@pytest.mark.asyncio
+async def test_request_pending_when_connection_drops_raises_connection_lost() -> None:
+    errors: list[dict[str, Any]] = []
+    async with ext(timeout=5.0) as (srv, board):
+        asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: errors.append(ctx))
+        task = asyncio.ensure_future(board.plugin("test.echo").request(2, b""))
+        await _until(lambda: any(cmd == 60 for cmd, _ in srv.received))
+        srv.drop()
+        with pytest.raises(ConnectionLost):
+            await asyncio.wait_for(task, 2)
+    import gc
+
+    gc.collect()
+    assert errors == []

@@ -12,6 +12,7 @@ from telemetrix_idf import BoardConnector, ChainError, connect
 from telemetrix_idf.wire import Reason
 
 LED_PIN = 36
+LED_READBACK = 35
 
 
 def board_of(srv: Server) -> BoardConnector:
@@ -30,7 +31,9 @@ async def test_echo_command_report_on_on_report(ext_server: Server) -> None:
 @pytest.mark.asyncio
 async def test_echo_request_returns_the_echoed_args(ext_server: Server) -> None:
     async with board_of(ext_server) as board:
-        assert await board.plugin("test.echo").request(ECHO, b"abc") == b"abc"
+        half = board.plugin("test.echo")
+        assert await half.request(ECHO, b"abc") == b"abc"
+        assert await half.request(ECHO, b"de") == b"de"  # a second request: the id is not the first one's
 
 
 @pytest.mark.asyncio
@@ -49,9 +52,20 @@ async def test_async_request_answered_from_a_task(ext_server: Server) -> None:
 
 
 @pytest.mark.asyncio
-async def test_named_pin_claim_on_test_led_pin_done(ext_server: Server) -> None:
+async def test_named_pin_claim_on_test_led_pin_driven_high(ext_server: Server) -> None:
     async with board_of(ext_server) as board:
+        # the host server loops pin 36 back to input pin 35
+        await board.pin(LED_READBACK).input()
+        changes = board.digital_changes(LED_READBACK)
         await board.plugin("test.echo").command(LED, bytes([LED_PIN]))
+
+        async def high() -> int:
+            async for event in changes:
+                if event.value == 1:
+                    return event.pin
+            raise AssertionError("the event stream ended")
+
+        assert await asyncio.wait_for(high(), 2) == LED_READBACK
 
 
 @pytest.mark.asyncio

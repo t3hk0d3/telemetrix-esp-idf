@@ -92,6 +92,7 @@ void host_script_fake(void)
     tmx_fake_reset();
     tmx_fake_loopback(5, 4);
     tmx_fake_loopback(13, 12);
+    tmx_fake_loopback(36, 35); /* the test plugin's LED claim (sub 3) reads back on pin 35 */
     tmx_fake_set_adc(1, 4, 2048);
     tmx_fake_set_adc(1, 5, 1024);
     tmx_fake_i2c_device(0, 0x76, regs, sizeof(regs));

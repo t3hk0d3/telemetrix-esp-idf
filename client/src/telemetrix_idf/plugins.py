@@ -9,8 +9,11 @@ major to that plugin's slot, once per board; `board.plugin(name)` returns the bo
 - `on_report(sub, data)` (override) gets every PLUGIN_REPORT of the slot, on the board's event dispatch task (never
   the reader); it may be a coroutine function, awaited before the next event.
 - `request(sub, args)`: by the request-id convention the first two bytes of the args and of the answering report's
-  data are a big-endian u16 request id. The half picks the id, sends the command and returns the data after the id
-  of the first PLUGIN_REPORT of its slot that starts with it. That report goes to the request, not to `on_report`.
+  data are a big-endian u16 request id. The half picks the id (1, 2, 3, ... wrapping past 65535, 0 never used), sends
+  the command and returns the data after the id of the first PLUGIN_REPORT of its slot that starts with it and comes
+  on the request's own sub (the report's sub equals the command's). That report goes to the request, not to
+  `on_report`. A report that matches no waiting request, such as a late answer to a request that timed out, is
+  delivered to `on_report`. When the connection closes, every pending request raises `ConnectionLost`.
 """
 
 from __future__ import annotations
@@ -39,8 +42,8 @@ class PluginHalf:
     def __init__(self, board: Board, slot: int) -> None:
         self.board = board
         self.slot = slot
-        self._requests: dict[int, asyncio.Future[bytes]] = {}
-        self._next_id = 0
+        self._requests: dict[int, tuple[int, asyncio.Future[bytes]]] = {}  # id -> (sub, future)
+        self._next_id = 1
 
     def command(self, sub: int, args: bytes = b"") -> Chain:
         """A chain holding PLUGIN `[slot, sub, args]`; await it to send it."""
@@ -58,7 +61,7 @@ class PluginHalf:
         """
         rid = self._allocate_id()
         future: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
-        self._requests[rid] = future
+        self._requests[rid] = (sub, future)
         wait = self.board.timeout if timeout is None else timeout
 
         async def exchange() -> bytes:
@@ -76,24 +79,27 @@ class PluginHalf:
         for _ in range(REQUEST_IDS):
             rid = self._next_id
             self._next_id = (self._next_id + 1) % REQUEST_IDS
-            if rid not in self._requests:
+            if rid and rid not in self._requests:
                 return rid
         raise TelemetrixError("no free request id")
 
-    def _take(self, data: bytes) -> bool:
-        """Complete the request whose id `data` starts with (called by the reader); False when none waits for it."""
+    def _take(self, sub: int, data: bytes) -> bool:
+        """Complete the request whose id `data` starts with, when the report came on the request's own sub (called by
+        the reader); False when none waits for it."""
         if len(data) < 2:
             return False
-        future = self._requests.get(int.from_bytes(data[:2], "big"))
-        if future is None or future.done():
+        entry = self._requests.get(int.from_bytes(data[:2], "big"))
+        if entry is None or entry[0] != sub or entry[1].done():
             return False
+        future = entry[1]
         future.set_result(bytes(data[2:]))
         return True
 
     def _fail_requests(self, error: BaseException) -> None:
-        for future in self._requests.values():
+        for _, future in self._requests.values():
             if not future.done():
                 future.set_exception(error)
+                future.exception()  # mark it retrieved: a request that is no longer awaited must not log at GC
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.name!r} {self.major}.x slot={self.slot}>"

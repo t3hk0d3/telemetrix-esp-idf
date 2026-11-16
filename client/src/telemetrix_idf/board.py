@@ -89,8 +89,8 @@ class Board:
     def plugin(self, name: str) -> PluginHalf:
         """The client half bound to the board's plugin `name`, created once per board.
 
-        Raises `NotSupported` in stock mode or when the board has no plugin `name`, `IncompatiblePlugin` when the
-        registered half's major differs from the board's, and `ValueError` when no half of that name was registered.
+        Raises `NotSupported` in stock mode, when the board has no plugin `name`, or when it has the plugin but no half
+        of that name was registered; `IncompatiblePlugin` when the registered half's major differs from the board's.
         """
         if self.mode != "extended":
             raise NotSupported("plugins need extended mode")
@@ -99,7 +99,7 @@ class Board:
             raise NotSupported(f"the board has no plugin {name!r}")
         cls = self._half_classes.get(name)
         if cls is None:
-            raise ValueError(f"no client half for plugin {name!r}: pass it to connect(plugins=[...])")
+            raise NotSupported(f"no client half for plugin {name!r}: pass it to connect(plugins=[...])")
         if cls.major != info.major:
             raise IncompatiblePlugin(
                 f"plugin {name!r} is {info.major}.{info.minor} on the board, the half is {cls.major}.x"
@@ -167,7 +167,7 @@ class Board:
         if rid == wire.RPT.PLUGIN_REPORT and self._halves_by_slot:
             report = wire.decode_plugin_report(payload)
             half = self._halves_by_slot.get(report.slot)
-            if half is not None and half._take(report.data):
+            if half is not None and half._take(report.sub, report.data):
                 return
         if not self._chains.handle(rid, payload):
             self._events.handle(rid, payload, asyncio.get_running_loop().time())

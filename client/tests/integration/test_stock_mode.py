@@ -96,3 +96,14 @@ async def test_reset_raises_not_supported(stock_server: Server) -> None:
     async with board_of(stock_server) as board:
         with pytest.raises(NotSupported):
             board.chain().reset()
+
+
+@pytest.mark.asyncio
+async def test_session_sends_nothing_extended_server_side(stock_server: Server) -> None:
+    async with board_of(stock_server) as board:
+        await board.pin(18).pwm(1000.0, 8).duty(128)
+        with pytest.raises(NotSupported):
+            board.chain().reset()
+        status = await asyncio.to_thread(stock_server.status)
+        counters = {k: status[k] for k in ("extended", "protocol_violations", "ignored_commands", "error_reports")}
+        assert counters == {"extended": 0, "protocol_violations": 0, "ignored_commands": 0, "error_reports": 0}
