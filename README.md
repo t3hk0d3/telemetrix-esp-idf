@@ -116,8 +116,8 @@ analog `SET_PIN_MODE` mode 3.
 
 Framing both ways: `[len][id][payload]`, `len` counts the id and the payload. Payload cap 30: `len` 2-31 is a command
 with a payload, `len` 1 a command without; `len` 0 consumes one byte and counts `dropped_packets`; `len` over 31
-skips `len` bytes and counts `dropped_packets`. A packet whose bytes do not all arrive within 2000 ms is dropped and
-counted. The connection always stays (stock mode is lenient). 16-bit values are big-endian; DHT floats (`float`) and the
+skips `len` bytes and counts `dropped_packets`. A packet whose bytes do not all arrive within 2000 ms, or that the
+client's disconnect cuts short, is dropped and counted. The connection always stays (stock mode is lenient). 16-bit values are big-endian; DHT floats (`float`) and the
 PWM frequency (`double`) are little-endian.
 
 Commands in scope (upstream `private_constants.py` ids):
@@ -215,7 +215,9 @@ and choose safe states for them.
 
 One client at a time: a second connection is accepted and closed with an RST (`SO_LINGER` 0, so no TIME_WAIT is left).
 Dead clients are found by TCP keepalive (idle 10 s, interval 2 s, count 3) and by the send-stall timeout: a client that
-stops reading and leaves unsent data with no progress for `send_stall_ms` (10 s) is dropped. Sends are non-blocking from
+stops reading and leaves unsent data with no progress for `send_stall_ms` (10 s) is dropped. A stalled client and one
+whose socket fails are closed with an RST (`SO_LINGER` 0), so no closing socket keeps retransmitting to a dead peer;
+an orderly end, a kick and a stop close normally. Sends are non-blocking from
 a per-connection queue; replies are never dropped, digital and analog reports are coalesced to the latest value per
 pin when the queue is full, sonar and DHT keep the latest reading per device.
 

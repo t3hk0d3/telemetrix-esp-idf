@@ -176,3 +176,31 @@ TEST_CASE("On a tick between packets: counts nothing", "[frame]")
     tmx_frame_tick(&f, 100000);
     TEST_ASSERT_EQUAL_UINT32(0, f.dropped);
 }
+
+TEST_CASE("On abandon inside a packet: drops the partial packet, dropped_packets +1", "[frame]")
+{
+    tmx_frame_t f;
+    capture_t c = {0};
+    const uint8_t head[] = {3, 2, 2};
+    tmx_frame_init(&f, TMX_STOCK_PAYLOAD_MAX);
+    tmx_frame_feed(&f, head, sizeof(head), 0, capture, &c);
+    tmx_frame_abandon(&f);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
+    TEST_ASSERT_EQUAL_INT(0, c.count);
+    TEST_ASSERT_EQUAL(0, f.need);
+}
+
+TEST_CASE("On abandon between packets or inside a skip: counts nothing more", "[frame]")
+{
+    tmx_frame_t f;
+    capture_t c = {0};
+    const uint8_t oversized[] = {40, 1, 2};
+    tmx_frame_init(&f, TMX_STOCK_PAYLOAD_MAX);
+    tmx_frame_abandon(&f);
+    TEST_ASSERT_EQUAL_UINT32(0, f.dropped);
+    tmx_frame_feed(&f, oversized, sizeof(oversized), 0, capture, &c);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);     /* counted when it began */
+    tmx_frame_abandon(&f);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
+    TEST_ASSERT_EQUAL(0, f.skip);
+}

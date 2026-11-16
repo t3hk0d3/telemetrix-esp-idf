@@ -27,6 +27,16 @@ void tmx_frame_tick(tmx_frame_t *f, uint32_t now_ms)
     }
 }
 
+void tmx_frame_abandon(tmx_frame_t *f)
+{
+    if (f->need > 0) {
+        f->dropped++;
+    }
+    f->need = 0;
+    f->have = 0;
+    f->skip = 0;
+}
+
 void tmx_frame_feed(tmx_frame_t *f, const uint8_t *data, size_t n, uint32_t now_ms, tmx_packet_fn fn, void *ctx)
 {
     tmx_frame_tick(f, now_ms);

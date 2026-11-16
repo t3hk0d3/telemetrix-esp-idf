@@ -119,6 +119,8 @@ void tmx_frame_feed(tmx_frame_t *f, const uint8_t *data, size_t n, uint32_t now_
 /** Drop a packet that has been unfinished for more than 2000 ms and count it; an expired skip only stops discarding
  *  (the oversized packet was counted when it began). */
 void tmx_frame_tick(tmx_frame_t *f, uint32_t now_ms);
+/** The connection ended: drop an unfinished packet and count it; an unfinished skip is forgotten (already counted). */
+void tmx_frame_abandon(tmx_frame_t *f);
 
 typedef enum { TMX_STOCK_OK, TMX_STOCK_SHORT, TMX_STOCK_IGNORED } tmx_stock_verdict_t;
 

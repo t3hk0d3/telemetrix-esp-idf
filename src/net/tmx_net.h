@@ -87,7 +87,7 @@ size_t tmx_conn_pending(const tmx_conn_t *c);
 int tmx_sock_listen(uint16_t port);
 /** Nonblocking, TCP_NODELAY, SO_KEEPALIVE with idle, interval and count from cfg. */
 esp_err_t tmx_sock_tune_client(int fd, const telemetrix_config_t *cfg);
-/** Close with SO_LINGER {1, 0}: the peer gets an RST. */
+/** Close with SO_LINGER {1, 0}: the peer gets an RST and no socket lingers (refusals, failed or stalled clients). */
 void tmx_sock_refuse(int fd);
 /** An IPv4-mapped IPv6 peer becomes a plain IPv4 sockaddr_in; anything else is copied. */
 void tmx_sock_normalise(const struct sockaddr_storage *in, struct sockaddr_storage *out);

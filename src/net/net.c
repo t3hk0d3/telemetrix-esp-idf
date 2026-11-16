@@ -240,12 +240,19 @@ static void packet_cb(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
 }
 
 /** Release the client: socket closed, claims freed and pins in their safe states, queue and completions dropped. Then
- *  the disconnected hook runs, with no lock held. */
-static void drop_client(tmx_server_t *s, const char *why)
+ *  the disconnected hook runs, with no lock held. abortive closes with an RST (SO_LINGER {1,0}): a peer that stopped
+ *  reading or whose socket failed would otherwise leave a FIN_WAIT socket retransmitting in lwIP's small pool. A packet
+ *  the client left unfinished counts in dropped_packets. */
+static void drop_client(tmx_server_t *s, const char *why, bool abortive)
 {
     ESP_LOGI(TAG, "client %s gone: %s", s->peer, why);
-    close(s->client);
+    if (abortive) {
+        tmx_sock_refuse(s->client);
+    } else {
+        close(s->client);
+    }
     s->client = -1;
+    tmx_frame_abandon(&s->frame);
     s->dropped_before += s->frame.dropped;
     tmx_adapter_release(&s->adapter);
     tmx_conn_reset(&s->conn);
@@ -296,13 +303,15 @@ static void accept_one(tmx_server_t *s)
     }
 }
 
-/** Read what the client sent. Returns false when the connection is over. */
-static bool read_client(tmx_server_t *s, const char **why)
+/** Read what the client sent. Returns false when the connection is over; *abortive is true when it failed rather than
+ *  ended in order. */
+static bool read_client(tmx_server_t *s, const char **why, bool *abortive)
 {
     uint8_t buf[RECV_CHUNK];
     ssize_t r = recv(s->client, buf, sizeof(buf), 0);
     if (r == 0) {
         *why = "closed by the peer";
+        *abortive = false;
         return false;
     }
     if (r < 0) {
@@ -310,6 +319,7 @@ static bool read_client(tmx_server_t *s, const char **why)
             return true;
         }
         *why = "socket error";
+        *abortive = true;
         return false;
     }
     s->now = now_ms();
@@ -324,6 +334,7 @@ void tmx_server_task(void *arg)
     while (!s->stop) {
         uint32_t wait_ms = LOOP_MAX_MS;
         const char *why = NULL;
+        bool abortive = true;
         if (s->client >= 0) {
             s->now = now_ms();
             uint32_t left = tmx_adapter_poll(&s->adapter, s->now);
@@ -339,9 +350,10 @@ void tmx_server_task(void *arg)
                 why = "send failed";
             } else if (s->kick) {
                 why = "kicked";
+                abortive = false;
             }
             if (why) {
-                drop_client(s, why);
+                drop_client(s, why, abortive);
             }
         }
 
@@ -377,8 +389,8 @@ void tmx_server_task(void *arg)
         if (s->stop) {
             break;
         }
-        if (s->client >= 0 && n > 0 && FD_ISSET(s->client, &rd) && !read_client(s, &why)) {
-            drop_client(s, why);
+        if (s->client >= 0 && n > 0 && FD_ISSET(s->client, &rd) && !read_client(s, &why, &abortive)) {
+            drop_client(s, why, abortive);
         }
         if (s->listener >= 0 && n > 0 && FD_ISSET(s->listener, &rd)) {
             accept_one(s);
@@ -386,7 +398,7 @@ void tmx_server_task(void *arg)
         publish_if_changed(s);
     }
     if (s->client >= 0) {
-        drop_client(s, "server stopping");
+        drop_client(s, "server stopping", false);
     }
     ESP_LOGI(TAG, "server task down");
     s->done = true;                     /* last access to s: telemetrix_stop frees it after this */

@@ -411,3 +411,24 @@ TEST_CASE("server accepting a client: keepalive on with the configured idle, int
     TEST_ASSERT_TRUE(wait_for(client_gone));
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
 }
+
+TEST_CASE("a client that disconnects inside a packet: the partial packet counts in dropped_packets", "[server]")
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    start_server(&cfg);
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    const uint8_t partial[] = {2, 0, 0x5a, 3, 2, 2};    /* a whole LOOP, then DIGITAL_WRITE without its value byte */
+    TEST_ASSERT_EQUAL(sizeof(partial), send(c, partial, sizeof(partial), 0));
+    uint8_t reply[3];
+    TEST_ASSERT_EQUAL(0, read_n(c, reply, sizeof(reply)));  /* the LOOP was served, so the partial bytes were read */
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
+    telemetrix_status_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
+    TEST_ASSERT_EQUAL_UINT32(1, st.dropped_packets);
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
