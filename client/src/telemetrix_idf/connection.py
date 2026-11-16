@@ -25,6 +25,7 @@ from . import wire
 from .board import Board, Stats
 from .discovery import parse_discovery
 from .errors import ConnectionLost, HandshakeTimeout, IncompatibleFirmware, ProtocolError
+from .plugins import check_halves
 from .stock import STOCK_BUSES, check_stock_firmware, stock_pins
 
 __all__ = ["BoardConnector", "Connection", "Router", "connect"]
@@ -212,8 +213,10 @@ def connect(
     `ConnectionLost` when the socket cannot be opened or closes, `asyncio.TimeoutError` when opening the socket or a
     discovery page takes longer than `timeout`, and `ProtocolError` for a malformed FIRMWARE answer or a malformed or
     refused discovery page. The socket is closed on every failure.
-    `plugins` are the client plugin halves (plugins.py) bound to the board's plugins.
+    `plugins` are the client plugin halves (plugins.py) bound to the board's plugins; anything but `PluginHalf`
+    subclasses raises `TypeError` at once, two of the same name `ValueError`.
     """
+    check_halves(plugins)
 
     async def opener() -> Board:
         return await _open(host, port, handshake_timeout, timeout, plugins)

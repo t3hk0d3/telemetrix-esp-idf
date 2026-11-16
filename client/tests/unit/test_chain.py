@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import warnings
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
-from fake_ext_server import FakeExtServer, crc8
+from fake_ext_server import FakeExtServer, crc8, limit_rec
 from fake_stock_server import FakeStockServer
 
 from telemetrix_idf import Board, ChainError, ConnectionLost, NotSupported, TelemetrixError
@@ -617,3 +618,186 @@ async def test_stock_pwm_channels_allocated_per_pin() -> None:
 async def test_await_timeout_defaults_to_connect_timeout() -> None:
     async with ext(timeout=0.25) as (_, board, _):
         assert board.timeout == 0.25
+
+
+# --- review follow-ups: effects only for done ops, PWM channels on send, reset, decode failures, broken chains ----
+
+
+def pwm_channels(srv: FakeExtServer | FakeStockServer, start: int = 0) -> dict[int, int]:
+    """pin -> channel byte of every SET_PIN_MODE PWM the server got (the last one per pin)."""
+    return {p[0]: p[2] for c, p in srv.received[start:] if c == 1 and p[1] == 8}
+
+
+@pytest.mark.asyncio
+async def test_refused_op_pin_kind_not_recorded() -> None:
+    async with ext(refuse=refuse_pin(17)) as (_, board, _):
+        with pytest.raises(ChainError):
+            await board.pin(17).servo()
+        with pytest.raises(ValueError, match="not set up"):
+            board.pin(17).detach()
+
+
+@pytest.mark.asyncio
+async def test_skipped_op_pin_kind_not_recorded() -> None:
+    async with ext(refuse=refuse_pin(17)) as (_, board, _):
+        with pytest.raises(ChainError):
+            await board.pin(17).output().pin(18).servo()
+        with pytest.raises(ValueError, match="not set up"):
+            board.pin(18).detach()
+
+
+@pytest.mark.asyncio
+async def test_done_op_after_refusal_in_non_atomic_chain_pin_kind_recorded() -> None:
+    async with ext(refuse=refuse_pin(17)) as (_, board, _):
+        with pytest.raises(ChainError):
+            await board.pin(17).output().pin(18).servo().atomic(False)
+        await board.pin(18).detach()
+
+
+@pytest.mark.asyncio
+async def test_stock_pwm_unsent_chain_holds_no_channel() -> None:
+    async with stock() as (srv, board, _):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            board.pin(12).pwm(1000.0, 10)
+            gc.collect()
+        await board.pin(13).pwm(1000.0, 10)
+        assert pwm_channels(srv) == {13: 0}
+
+
+@pytest.mark.asyncio
+async def test_ext_pwm_refused_channel_released() -> None:
+    async with ext(refuse=refuse_pin(12)) as (srv, board, _):
+        with pytest.raises(ChainError):
+            await board.pin(12).pwm(1000.0, 10)
+        await board.pin(13).pwm(1000.0, 10)
+        assert pwm_channels(srv)[13] == 0
+
+
+@pytest.mark.asyncio
+async def test_ext_pwm_detach_frees_channel() -> None:
+    async with ext() as (srv, board, _):
+        await board.pin(12).pwm(1000.0, 10).pin(13).pwm(1000.0, 10)
+        await board.pin(12).detach()
+        await board.pin(14).pwm(1000.0, 10)
+        assert pwm_channels(srv)[14] == 0
+
+
+@pytest.mark.asyncio
+async def test_ext_pwm_not_capped_at_16_without_limit() -> None:
+    async with ext() as (srv, board, _):
+        chain = board.chain()
+        for gpio in range(20):
+            chain.pin(gpio).pwm(1000.0, 10)
+        await chain
+        assert pwm_channels(srv)[19] == 19
+
+
+@pytest.mark.asyncio
+async def test_ext_pwm_capped_by_limit_nothing_written() -> None:
+    async with ext(pages=[limit_rec(2, 2)]) as (srv, board, mark):
+        with pytest.raises(TelemetrixError, match="no free PWM channel"):
+            await board.pin(12).pwm(1000.0, 10).pin(13).pwm(1000.0, 10).pin(14).pwm(1000.0, 10)
+        await asyncio.sleep(0.02)
+        assert bytes(srv.raw[mark:]) == b""
+
+
+@pytest.mark.asyncio
+async def test_ext_pwm_capped_by_limit_channels_of_failed_send_released() -> None:
+    async with ext(pages=[limit_rec(2, 2)]) as (srv, board, _):
+        with pytest.raises(TelemetrixError):
+            await board.pin(12).pwm(1000.0, 10).pin(13).pwm(1000.0, 10).pin(14).pwm(1000.0, 10)
+        await board.pin(14).pwm(1000.0, 10).pin(15).pwm(1000.0, 10)
+        assert pwm_channels(srv) == {14: 0, 15: 1}
+
+
+@pytest.mark.asyncio
+async def test_ext_reset_clears_pin_kinds() -> None:
+    async with ext() as (_, board, _):
+        await board.pin(12).pwm(1000.0, 10).pin(13).servo()
+        await board.chain().reset()
+        with pytest.raises(ValueError, match="not set up"):
+            board.pin(13).detach()
+
+
+@pytest.mark.asyncio
+async def test_ext_reset_frees_pwm_channels() -> None:
+    async with ext() as (srv, board, _):
+        await board.pin(12).pwm(1000.0, 10)
+        await board.chain().reset()
+        await board.pin(13).pwm(1000.0, 10)
+        assert pwm_channels(srv)[13] == 0
+
+
+@pytest.mark.asyncio
+async def test_ext_refused_reset_keeps_pin_kinds() -> None:
+    refuse = lambda cmd, payload: Reason.HARDWARE if cmd == 20 else None  # noqa: E731
+    async with ext(refuse=refuse) as (_, board, _):
+        await board.pin(13).servo()
+        with pytest.raises(ChainError):
+            await board.chain().reset()
+        await board.pin(13).detach()
+
+
+class _MalformedI2c(FakeExtServer):
+    """Answers every I2C read with a count byte that does not match its data."""
+
+    def _stock(self, cmd: int, payload: bytes) -> bytes | int | None:
+        if cmd == 10:
+            return bytes([9, 5, payload[0], payload[1]])
+        return super()._stock(cmd, payload)
+
+
+@pytest.mark.asyncio
+async def test_ext_reply_decode_failure_refuses_op_hardware() -> None:
+    async with _MalformedI2c() as srv, connect("127.0.0.1", srv.port, timeout=1.0) as board:
+        with pytest.raises(ChainError) as err:
+            await board.i2c(0).read(0x48, 0, 1)
+        assert err.value.results[0][1:3] == ("refused", Reason.HARDWARE)
+
+
+@pytest.mark.asyncio
+async def test_ext_reply_decode_failure_counted() -> None:
+    async with _MalformedI2c() as srv, connect("127.0.0.1", srv.port, timeout=1.0) as board:
+        with pytest.raises(ChainError):
+            await board.i2c(0).read(0x48, 0, 1)
+        assert board.stats.protocol_errors == 1
+
+
+@pytest.mark.asyncio
+async def test_building_raised_chain_does_not_warn(recwarn: pytest.WarningsRecorder) -> None:
+    async with ext() as (_, board, _):
+        with pytest.raises(ValueError):
+            board.pin(4).output().input(pull="sideways")  # type: ignore[arg-type]
+        gc.collect()
+        assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
+
+
+@pytest.mark.asyncio
+async def test_building_raised_chain_refuses_extension() -> None:
+    async with ext() as (_, board, _):
+        chain = board.pin(4).output()
+        with pytest.raises(ValueError):
+            chain.write(300)
+        with pytest.raises(ValueError, match="discarded"):
+            chain.pin(5).output()
+
+
+@pytest.mark.asyncio
+async def test_building_raised_chain_refuses_await() -> None:
+    async with ext() as (srv, board, mark):
+        chain = board.pin(4).output()
+        with pytest.raises(ValueError):
+            chain.write(300)
+        with pytest.raises(ValueError, match="discarded"):
+            await chain
+        assert bytes(srv.raw[mark:]) == b""
+
+
+@pytest.mark.asyncio
+async def test_failed_send_chain_does_not_warn(recwarn: pytest.WarningsRecorder) -> None:
+    async with ext(pages=[limit_rec(2, 0)]) as (_, board, _):
+        with pytest.raises(TelemetrixError):
+            await board.pin(12).pwm(1000.0, 10)
+        gc.collect()
+        assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]

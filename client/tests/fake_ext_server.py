@@ -100,7 +100,10 @@ class FakeExtServer(FakeServerBase):
     Scriptable: `refuse(cmd, payload)` returns a reason to refuse a command (ON_BUS is passed as 58 with its
     payload); `refuse_pages` are discovery pages answered with ERROR BAD_ARGUMENT; `i2c_nack` are addresses whose
     I2C read gets ERROR NO_ANSWER; `buses` are the bus numbers ON_BUS accepts (others: BUS_UNKNOWN); `roms` are the
-    1-wire devices ONE_WIRE_SEARCH finds; `hold` keeps every reply in `held` until `release()`.
+    1-wire devices ONE_WIRE_SEARCH finds; `hold` keeps every reply in `held` until `release()`;
+    `plugin(slot, sub, args)` answers PLUGIN: a list of `(sub, data)` sent as PLUGIN_REPORTs of that slot, or an int,
+    the plugin's refusal code (ERROR PLUGIN with `[slot, sub, code]`). Without `plugin` every PLUGIN gets ERROR
+    NO_SUCH_SLOT.
     """
 
     def __init__(
@@ -115,6 +118,7 @@ class FakeExtServer(FakeServerBase):
         i2c_nack: frozenset[int] | set[int] = frozenset(),
         buses: frozenset[int] | set[int] = frozenset({0, 1}),
         roms: Sequence[bytes] = (),
+        plugin: Callable[[int, int, bytes], list[tuple[int, bytes]] | int] | None = None,
     ) -> None:
         super().__init__(pre_handshake=pre_handshake, silent=silent)
         self.pages = list(pages)
@@ -124,6 +128,7 @@ class FakeExtServer(FakeServerBase):
         self.i2c_nack = set(i2c_nack)
         self.buses = set(buses)
         self.roms = list(roms)
+        self.plugin = plugin
         self.hold = False
         self.held = bytearray()
         self.numbered = False
@@ -169,6 +174,8 @@ class FakeExtServer(FakeServerBase):
                 return self._error(seq, cmd, 5)
             body = bytes([page, len(self.pages) - 1]) + self.pages[page]
             return bytes([1 + len(body), 60]) + body
+        if cmd == 60:
+            return self._plugin(seq, payload[0], payload[1], payload[2:])
         if cmd == 58:
             bus = payload[0]
             if bus not in self.buses:
@@ -184,6 +191,16 @@ class FakeExtServer(FakeServerBase):
         if isinstance(out, int):
             return self._error(seq, cmd, out)
         return b"" if out is None else bytes([len(out)]) + out
+
+    def _plugin(self, seq: int, slot: int, sub: int, args: bytes) -> bytes:
+        if self.plugin is None:
+            self.failed = True
+            return bytes([7, 57, seq >> 8, seq & 0xFF, 60, 12, slot, sub])
+        out = self.plugin(slot, sub, args)
+        if isinstance(out, int):
+            self.failed = True
+            return bytes([8, 57, seq >> 8, seq & 0xFF, 60, 10, slot, sub, out])
+        return b"".join(bytes([3 + len(data), 61, slot, rsub]) + data for rsub, data in out)
 
     def _error(self, seq: int, cmd: int, reason: int) -> bytes:
         if reason != 11:

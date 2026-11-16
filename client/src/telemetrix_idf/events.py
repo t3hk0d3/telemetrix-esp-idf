@@ -9,7 +9,7 @@ is logged and the others still run.
 
 In stock mode the board passes only reports for pins this session configured (`configure`), since upstream keeps
 reporting pins an earlier session set up. Every event carries `timestamp`, the loop's `time()` when the reader got the
-report.
+report. PLUGIN_REPORTs become `PluginEvent`s keyed by slot; the board subscribes each bound plugin half (plugins.py).
 """
 
 from __future__ import annotations
@@ -28,13 +28,13 @@ from . import wire
 if TYPE_CHECKING:
     from .board import Stats
 
-__all__ = ["AnalogEvent", "DhtEvent", "DigitalEvent", "Event", "EventHub", "EventStream", "SonarEvent"]
+__all__ = ["AnalogEvent", "DhtEvent", "DigitalEvent", "Event", "EventHub", "EventStream", "PluginEvent", "SonarEvent"]
 
 log = logging.getLogger("telemetrix_idf")
 
 MAX_QUEUE = 1000
 
-Kind = Literal["digital", "analog", "sonar", "dht"]
+Kind = Literal["digital", "analog", "sonar", "dht", "plugin"]
 Key = tuple[Kind, int]
 
 
@@ -70,8 +70,16 @@ class DhtEvent:
     timestamp: float
 
 
-Event = DigitalEvent | AnalogEvent | SonarEvent | DhtEvent
-E = TypeVar("E", DigitalEvent, AnalogEvent, SonarEvent, DhtEvent)
+@dataclass(frozen=True)
+class PluginEvent:
+    slot: int
+    sub: int
+    data: bytes
+    timestamp: float
+
+
+Event = DigitalEvent | AnalogEvent | SonarEvent | DhtEvent | PluginEvent
+E = TypeVar("E", DigitalEvent, AnalogEvent, SonarEvent, DhtEvent, PluginEvent)
 Callback = Callable[[Any], object]
 
 
@@ -134,9 +142,18 @@ class EventHub:
         self._wake = asyncio.Event()
         self._task = asyncio.get_running_loop().create_task(self._run(), name="telemetrix-events")
 
-    def configure(self, key: Key) -> None:
-        """Mark a pin as set up in this session (stock mode passes only these pins' reports)."""
+    def configure(self, key: Key) -> Callable[[], None] | None:
+        """Mark a pin as set up in this session (stock mode passes only these pins' reports); returns the undo."""
+        if key in self._configured:
+            return None
         self._configured.add(key)
+        return lambda: self._configured.discard(key)
+
+    def forget_configured(self) -> Callable[[], None]:
+        """No pin is set up any more (a RESET); returns the undo, which adds the forgotten pins back."""
+        forgotten = set(self._configured)
+        self._configured.clear()
+        return lambda: self._configured.update(forgotten)
 
     def subscribe(self, key: Key, callback: Callback) -> Callable[[], None]:
         """Call `callback(event)` for each event of `key`; returns the unsubscribe callable (idempotent)."""
@@ -177,9 +194,12 @@ class EventHub:
             else:
                 event = DhtEvent(r.pin, None, None, r.code, now)
             key = ("dht", r.pin)
+        elif rid == wire.RPT.PLUGIN_REPORT:
+            p = wire.decode_plugin_report(payload)
+            key, event = ("plugin", p.slot), PluginEvent(p.slot, p.sub, p.data, now)
         else:
             return False
-        if self._only_configured and key not in self._configured:
+        if self._only_configured and key[0] != "plugin" and key not in self._configured:
             return True
         if not self._callbacks.get(key) and not self._streams.get(key):
             return True

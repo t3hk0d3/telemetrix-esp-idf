@@ -55,6 +55,7 @@ class ChainError(TelemetrixError):
 
     def __init__(self, results: list[CommandResult]) -> None:
         bad = [r for r in results if r.status != "done"]
-        first = f"; first: {bad[0].op} {bad[0].status} {bad[0].reason!r}" if bad else ""
+        code = f" code {bad[0].code}" if bad and bad[0].code is not None else ""
+        first = f"; first: {bad[0].op} {bad[0].status} {bad[0].reason!r}{code}" if bad else ""
         super().__init__(f"chain refused: {len(bad)} of {len(results)} commands not done{first}")
         self.results = results

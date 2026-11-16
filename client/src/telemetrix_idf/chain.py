@@ -14,18 +14,26 @@ and a closing barrier in one write and completes when the board answers the barr
 
 Replies are matched per kind (I2C read on a bus, 1-wire op on a bus and subtype) by a FIFO of the ops that expect
 them; an ERROR removes its op's expectation. A reply nothing expects is counted in `board.stats.unmatched_replies`
-and dropped. Barrier tags are 16-bit (extended) or 8-bit (stock); a tag whose await timed out or was cancelled stays
-reserved until its reply arrives or the connection drops, and its late replies are consumed and discarded.
+and dropped. A reply that does not decode marks its op REFUSED HARDWARE (counted in `board.stats.protocol_errors`).
+Barrier tags are 16-bit (extended) or 8-bit (stock); a tag whose await timed out or was cancelled stays reserved until
+its reply arrives or the connection drops, and its late replies are consumed and discarded.
+
+The client's own pin state (what each pin was set up as, the stock-mode pins whose reports are passed on, PWM
+channels) changes when a chain is written and is put back for every op that ends refused or skipped. PWM channels are
+allocated when the chain is written: 16 in stock mode, `limits["pwm_channels"]` (or 256) in extended mode, where the
+server picks its own channel. A RESET clears that state (put back too when the RESET is refused).
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
+import logging
 import warnings
 from collections import deque
 from collections.abc import Callable, Generator, Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeVar, cast
 
 from . import wire
 from .errors import ChainError, ConnectionLost, NotSupported, ProtocolError, TelemetrixError
@@ -38,14 +46,19 @@ if TYPE_CHECKING:
 
 __all__ = ["Chain", "ChainEngine", "ChainResult", "CommandResult", "CommandStatus", "TagPool"]
 
+log = logging.getLogger("telemetrix_idf")
+
 CommandStatus = Literal["done", "refused", "skipped"]
 PWM_CHANNELS = 16  # LEDC channels of the stock firmware's chip (ESP32)
+
+Undo = Callable[[], None]
 
 
 class CommandResult(NamedTuple):
     op: str  # the chain method that added the command, e.g. "output"
     status: CommandStatus
     reason: Reason | int | None
+    code: int | None = None  # a plugin's own refusal code (reason PLUGIN)
 
 
 class ChainResult(NamedTuple):
@@ -85,11 +98,25 @@ class _Op:
     decode: Callable[[bytes], Any] | None = None  # set for value-yielding ops
     refusal: ReplyKey | None = None  # stock: the refusal report FIFO (servo by pin)
     addr: int | None = None  # stock I2C read: matched against `[8, 1, addr]`
-    on_send: list[Callable[[], None]] = field(default_factory=list)
+    prepare: Callable[[_Op], Undo | None] | None = None  # before writing; may set `packet`, may raise
+    on_send: list[Callable[[], Undo | None]] = field(default_factory=list)  # after writing; each may return an undo
+    undo: list[Undo] = field(default_factory=list)  # run (last first) when the op ends refused or skipped
     seq: int | None = None
     status: CommandStatus = "done"
     reason: Reason | int | None = None
+    code: int | None = None
     value: Any = None
+
+    def settle(self) -> None:
+        """At the barrier: put back the client state this op changed unless it was done."""
+        if self.status == "done":
+            return
+        for undo in reversed(self.undo):
+            try:
+                undo()
+            except Exception:
+                log.exception("undo of %s failed", self.name)
+        self.undo.clear()
 
 
 @dataclass(eq=False)
@@ -200,6 +227,7 @@ class ChainEngine:
             return
         op.status = "skipped" if e.reason == Reason.SKIPPED else "refused"
         op.reason = e.reason
+        op.code = e.code
         self._forget(op)
 
     def _refused(self, candidates: Iterable[_Op] | None, reason: Reason) -> None:
@@ -219,7 +247,12 @@ class ChainEngine:
         if op.refusal is not None:
             self._remove(self._refusals, op.refusal, op)
         assert op.decode is not None
-        op.value = op.decode(payload)
+        try:
+            op.value = op.decode(payload)
+        except ProtocolError as e:
+            self._stats.protocol_errors += 1
+            log.warning("reply to %s does not decode: %s", op.name, e)
+            op.status, op.reason = "refused", Reason.HARDWARE
 
     def _barrier(self, tag: int) -> None:
         if tag not in self._barriers:
@@ -233,6 +266,7 @@ class ChainEngine:
             if op.seq is not None and self._by_seq.get(op.seq) is op:
                 del self._by_seq[op.seq]
             self._forget(op)
+            op.settle()
         if not pending.future.done():
             pending.future.set_result(None)
 
@@ -287,6 +321,24 @@ def _ow_rom(payload: bytes) -> bytes | None:
 
 # --- the chain ---------------------------------------------------------------------------------------------------
 
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _building(method: F) -> F:
+    """A chain-building method: refused on a discarded chain; any error it raises discards the chain."""
+
+    @functools.wraps(method)
+    def wrapper(self: Chain, *args: Any, **kwargs: Any) -> Any:
+        self._check_usable()
+        try:
+            return method(self, *args, **kwargs)
+        except Exception as e:
+            self._broken = e
+            self._ops.clear()
+            raise
+
+    return cast(F, wrapper)
+
 
 class Chain:
     """A batch of commands for one board. Every method adds a command (or picks a target) and returns the chain.
@@ -299,8 +351,9 @@ class Chain:
     `await chain` returns the value of the last value-yielding op, or None. `await chain.run()` returns a
     `ChainResult`. Both raise `ChainError` (every op's `CommandResult`) when an op was refused or skipped,
     `asyncio.TimeoutError` when the board does not confirm in time, `ConnectionLost` when the connection closes.
-    A call that needs extended mode raises `NotSupported` in stock mode, and an invalid stock pin `ValueError`;
-    either discards the chain before anything is written.
+    A call that needs extended mode raises `NotSupported` in stock mode, and an invalid stock pin `ValueError`.
+    Any error a building call raises discards the chain: nothing of it is written, it does not warn as never awaited,
+    and every later call on it, await included, raises `ValueError`.
     """
 
     def __init__(self, board: Board) -> None:
@@ -311,23 +364,28 @@ class Chain:
         self._target: tuple[str, int] | None = None
         self._kinds: dict[int, str] = {}  # pin kinds set earlier in this chain
         self._sent = False
+        self._broken: Exception | None = None  # the error that discarded the chain
 
     # --- targets and flags
 
+    @_building
     def pin(self, gpio: int) -> Chain:
         self._target = ("pin", gpio)
         return self
 
+    @_building
     def i2c(self, bus: int = 0) -> Chain:
         self._need_bus(bus)
         self._target = ("i2c", bus)
         return self
 
+    @_building
     def onewire(self, bus: int = 0) -> Chain:
         self._need_bus(bus)
         self._target = ("onewire", bus)
         return self
 
+    @_building
     def atomic(self, flag: bool = True) -> Chain:
         """Abort on the first refusal (default): later commands are skipped. False runs every command."""
         self._atomic = bool(flag)
@@ -335,6 +393,7 @@ class Chain:
 
     # --- pins
 
+    @_building
     def input(self, pull: Literal["up", "down"] | None = None, report: bool = True) -> Chain:
         gpio = self._pin("input", "input")
         builders = {None: wire.set_pin_mode_input, "up": wire.set_pin_mode_input_pullup}
@@ -343,35 +402,49 @@ class Chain:
             raise ValueError(f"pull {pull!r} is not 'up', 'down' or None")
         return self._add("input", builders[pull](gpio, report), kind=(gpio, "digital"), event=("digital", gpio))
 
+    @_building
     def output(self) -> Chain:
         gpio = self._pin("output", "output")
         return self._add("output", wire.set_pin_mode_output(gpio), kind=(gpio, "output"))
 
+    @_building
     def analog(self, differential: int = 0, report: bool = True) -> Chain:
         gpio = self._pin("analog", "analog")
         packet = wire.set_pin_mode_analog(gpio, differential, report)
         return self._add("analog", packet, kind=(gpio, "analog"), event=("analog", gpio))
 
+    @_building
     def pwm(self, freq_hz: float, resolution: int) -> Chain:
-        """PWM mode. The channel is the client's (stock firmware uses it; our server allocates its own)."""
+        """PWM mode. The channel is the client's, allocated when the chain is written (stock firmware uses it; our
+        server allocates its own). No free channel then raises `TelemetrixError` and nothing is written."""
         gpio = self._pin("pwm", "output")
-        channel = self._board._pwm_channel(gpio)
-        packet = wire.set_pin_mode_pwm(gpio, channel, resolution, freq_hz)
-        return self._add("pwm", packet, kind=(gpio, "pwm"))
+        board = self._board
+        packet = wire.set_pin_mode_pwm(gpio, 0, resolution, freq_hz)  # validates; the channel byte is set on send
 
+        def allocate(op: _Op) -> Undo | None:
+            channel, undo = board._pwm_allocate(gpio)
+            op.packet = packet[:4] + bytes([channel]) + packet[5:]
+            return undo
+
+        return self._add_op(_Op("pwm", packet, prepare=allocate), kind=(gpio, "pwm"))
+
+    @_building
     def duty(self, value: int) -> Chain:
         gpio = self._pin("duty", "output")
         return self._add("duty", wire.analog_write(gpio, value))
 
+    @_building
     def servo(self, min_us: int = 1000, max_us: int = 2000) -> Chain:
         gpio = self._pin("servo", "servo")
         op = _Op("servo", wire.servo_attach(gpio, min_us, max_us), refusal=("servo", gpio))
         return self._add_op(op, kind=(gpio, "servo"))
 
+    @_building
     def angle(self, deg: int) -> Chain:
         gpio = self._pin("angle", "servo")
         return self._add("angle", wire.servo_write(gpio, deg))
 
+    @_building
     def detach(self) -> Chain:
         """Detach a servo or PWM pin (as last set up by this client)."""
         gpio = self._pin("detach")
@@ -384,6 +457,7 @@ class Chain:
             return self._add_op(op, kind=(gpio, None))
         raise ValueError(f"detach() needs a servo or PWM pin; pin {gpio} is {kind or 'not set up'}")
 
+    @_building
     def report(self, on: bool) -> Chain:
         """Turn reporting of a digital input or analog pin on or off."""
         gpio = self._pin("report")
@@ -396,6 +470,7 @@ class Chain:
 
     # --- context-dependent: pin, I2C, 1-wire
 
+    @_building
     def write(self, value: int, data: bytes | None = None, *, power: bool = False) -> Chain:
         """`write(level)` on a pin, `write(addr, data)` on I2C, `write(byte, power=False)` on 1-wire."""
         kind, n = self._need_target("write")
@@ -412,6 +487,7 @@ class Chain:
             raise ValueError("write(byte, power=False) on 1-wire takes one byte")
         return self._add("write", self._on_bus(n, wire.one_wire_write(value, power)))
 
+    @_building
     def read(self, addr: int | None = None, reg: int = 0, n: int = 1, stop: bool = True) -> Chain:
         """`read(addr, reg, n, stop=True)` on I2C yields bytes; `read()` on 1-wire yields an int."""
         kind, bus = self._need_target("read")
@@ -426,6 +502,7 @@ class Chain:
             return self._ow("read", wire.one_wire_read(), bus, wire.CMD.ONE_WIRE_READ, _ow_byte)
         raise ValueError("read() needs an I2C or 1-wire target; start with .i2c(bus) or .onewire(bus)")
 
+    @_building
     def reset(self) -> Chain:
         """On a 1-wire bus: a bus reset, yields presence (bool). Otherwise the board's RESET (extended mode only)."""
         if self._target is not None and self._target[0] == "onewire":
@@ -433,10 +510,11 @@ class Chain:
             return self._ow("reset", wire.one_wire_reset(), bus, wire.CMD.ONE_WIRE_RESET, _ow_presence)
         if self._stock:
             self._discard(NotSupported("reset() needs extended mode; upstream reboots on RESET"))
-        return self._add("reset", wire.reset())
+        return self._add_op(_Op("reset", wire.reset(), on_send=[self._board._forget_pins]))
 
     # --- I2C
 
+    @_building
     def begin(self, sda: int | None = None, scl: int | None = None) -> Chain:
         bus = self._bus("begin", "i2c")
         for gpio in (sda, scl):
@@ -446,6 +524,7 @@ class Chain:
 
     # --- 1-wire
 
+    @_building
     def init(self, pin: int | None = None) -> Chain:
         """Start the bus; `pin` defaults to the bus's pin from discovery when the board fixes it."""
         bus = self._bus("init", "onewire")
@@ -457,23 +536,28 @@ class Chain:
         self._stock_pin(pin, "input", "output")
         return self._add("init", self._on_bus(bus, wire.one_wire_init(pin)))
 
+    @_building
     def select(self, rom: bytes) -> Chain:
         bus = self._bus("select", "onewire")
         return self._add("select", self._on_bus(bus, wire.one_wire_select(rom)))
 
+    @_building
     def skip(self) -> Chain:
         bus = self._bus("skip", "onewire")
         return self._add("skip", self._on_bus(bus, wire.one_wire_skip()))
 
+    @_building
     def reset_search(self) -> Chain:
         bus = self._bus("reset_search", "onewire")
         return self._add("reset_search", self._on_bus(bus, wire.one_wire_reset_search()))
 
+    @_building
     def search(self) -> Chain:
         """Yields the next ROM (8 bytes), or None when no device is left."""
         bus = self._bus("search", "onewire")
         return self._ow("search", wire.one_wire_search(), bus, wire.CMD.ONE_WIRE_SEARCH, _ow_rom)
 
+    @_building
     def crc8(self, data: bytes) -> Chain:
         """Yields the board's CRC-8 of `data`."""
         bus = self._bus("crc8", "onewire")
@@ -481,6 +565,7 @@ class Chain:
 
     async def search_all(self, timeout: float | None = None) -> list[bytes]:
         """Every ROM on this chain's 1-wire bus: a search reset, then one search chain per device."""
+        self._check_usable()
         bus = self._bus("search_all", "onewire")
         if self._ops:
             raise ValueError("search_all() runs its own chains; call it on a chain without commands")
@@ -495,21 +580,35 @@ class Chain:
 
     # --- sensors and reporting
 
+    @_building
     def sonar(self, trig: int, echo: int) -> Chain:
         self._stock_pin(trig, "output")
         self._stock_pin(echo, "input")
         return self._add("sonar", wire.sonar_new(trig, echo), event=("sonar", trig))
 
+    @_building
     def dht(self, pin: int) -> Chain:
         self._stock_pin(pin, "input", "output")
         return self._add("dht", wire.dht_new(pin), event=("dht", pin))
 
+    @_building
     def reporting(self, enabled: bool) -> Chain:
         """Resume (ENABLE_ALL_REPORTS) or stop (STOP_ALL_REPORTS) every report."""
         return self._add("reporting", wire.enable_all_reports() if enabled else wire.stop_all_reports())
 
+    @_building
     def analog_interval(self, ms: int) -> Chain:
         return self._add("analog_interval", wire.set_analog_scanning_interval(ms))
+
+    # --- plugins
+
+    @_building
+    def plugin(self, slot: int, sub: int, args: bytes = b"") -> Chain:
+        """PLUGIN `[slot, sub, args]` (extended mode only). A refusal shows as reason PLUGIN with the plugin's code
+        in `CommandResult.code`. `board.plugin(name).command(sub, args)` names the slot for you (plugins.py)."""
+        if self._stock:
+            self._discard(NotSupported("plugins need extended mode"))
+        return self._add("plugin", wire.plugin(slot, sub, args))
 
     # --- sending
 
@@ -518,16 +617,29 @@ class Chain:
 
     async def run(self, timeout: float | None = None) -> ChainResult:
         """Send the chain; `timeout` defaults to the board's (5 s)."""
-        if self._sent:
-            raise ValueError("chain already sent")
+        self._check_usable()
         self._sent = True
         ops = self._ops
-        future = self._board._chains.send(ops, self._atomic)
+        prepared: list[tuple[_Op, Undo]] = []
+        try:
+            for op in ops:
+                undo = op.prepare(op) if op.prepare is not None else None
+                if undo is not None:
+                    prepared.append((op, undo))
+            future = self._board._chains.send(ops, self._atomic)
+        except BaseException:
+            for _, undo in reversed(prepared):
+                undo()
+            raise
+        for op, undo in prepared:
+            op.undo.append(undo)
         for op in ops:
             for effect in op.on_send:
-                effect()
+                undo = effect()
+                if undo is not None:
+                    op.undo.append(undo)
         await asyncio.wait_for(future, self._board.timeout if timeout is None else timeout)
-        results = [CommandResult(op.name, op.status, op.reason) for op in ops]
+        results = [CommandResult(op.name, op.status, op.reason, op.code) for op in ops]
         if any(op.status != "done" for op in ops):
             raise ChainError(results)
         return ChainResult([op.value for op in ops if op.decode is not None], results)
@@ -537,7 +649,7 @@ class Chain:
         return values[-1] if values else None
 
     def __del__(self) -> None:
-        if self._ops and not self._sent:
+        if self._ops and not self._sent and self._broken is None:
             warnings.warn(f"chain never awaited ({len(self._ops)} commands)", RuntimeWarning, stacklevel=2)
 
     def __repr__(self) -> str:
@@ -594,6 +706,12 @@ class Chain:
         """Stock mode: the pin must be in every named upstream list (the firmware indexes unchecked arrays)."""
         if self._stock and not all(gpio in STOCK_PINS[name] for name in lists):
             self._discard(ValueError(f"pin {gpio} is not a stock {'/'.join(lists)} pin"))
+
+    def _check_usable(self) -> None:
+        if self._broken is not None:
+            raise ValueError(f"chain discarded: an earlier call on it raised {self._broken!r}")
+        if self._sent:
+            raise ValueError("chain already sent")
 
     def _discard(self, error: Exception) -> None:
         self._ops.clear()

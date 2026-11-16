@@ -14,7 +14,8 @@ from .errors import (
     ProtocolError,
     TelemetrixError,
 )
-from .events import AnalogEvent, DhtEvent, DigitalEvent, EventStream, SonarEvent
+from .events import AnalogEvent, DhtEvent, DigitalEvent, EventStream, PluginEvent, SonarEvent
+from .plugins import PluginHalf
 from .wire import Reason
 
 __all__ = [
@@ -31,6 +32,8 @@ __all__ = [
     "EventStream",
     "ChipInfo",
     "PinInfo",
+    "PluginEvent",
+    "PluginHalf",
     "PluginInfo",
     "Reason",
     "SafeState",

@@ -65,8 +65,8 @@ client-lint: $(CLIENT_VENV)/.installed ## ruff format check and ruff check on cl
 client-test: $(CLIENT_VENV)/.installed ## Client unit tests
 	cd client && .venv/bin/python -m pytest tests/unit
 
-client-integration: ## Client integration tests against the host server (not yet)
-	@echo "client-integration: not yet"
+client-integration: host-server $(CLIENT_VENV)/.installed ## Client integration tests against the host server
+	cd client && TMX_HOST_SERVER_BUILT=1 .venv/bin/python -m pytest tests/integration
 
 # One build per line: example, target, build directory suffix, SDKCONFIG_DEFAULTS (empty = the example's own default).
 define build_example

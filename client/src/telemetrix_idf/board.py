@@ -8,10 +8,12 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
+from . import wire
 from .chain import PWM_CHANNELS, Chain, ChainEngine
 from .discovery import BusInfo, ChipInfo, PinInfo, PluginInfo
-from .errors import TelemetrixError
+from .errors import ConnectionLost, IncompatiblePlugin, NotSupported, TelemetrixError
 from .events import AnalogEvent, DhtEvent, DigitalEvent, EventHub, EventStream, SonarEvent
+from .plugins import PluginHalf, check_halves
 
 if TYPE_CHECKING:
     from .connection import Connection
@@ -39,6 +41,7 @@ class Board:
     Commands: `chain()`, `pin(gpio)`, `i2c(bus)` and `onewire(bus)` start a `Chain` (chain.py); await it to send it.
     Events: `on_digital(pin, cb)` and friends return an unsubscribe callable; `digital_changes(pin)` and friends are
     async iterators (events.py). `timeout` is the default of every chain's await.
+    Plugins: `plugin(name)` returns the bound client half registered with `connect(plugins=[...])` (plugins.py).
     """
 
     def __init__(
@@ -67,14 +70,55 @@ class Board:
         self.limits: Mapping[str, int] = MappingProxyType(dict(limits))
         self.plugins_available: Mapping[str, PluginInfo] = MappingProxyType(dict(plugins_available))
         self.stats = stats
-        self._plugin_halves = tuple(plugin_halves)  # bound to sessions by plugins.py (Task 12)
+        self._half_classes = check_halves(plugin_halves)
         self.timeout = timeout
         self._pin_kinds: dict[int, str] = {}  # what this client last set each pin up as
         self._pwm_channels: dict[int, int] = {}  # pin -> LEDC channel named in PWM mode
         self._chains = ChainEngine(connection, stats, extended=mode == "extended")
         self._events = EventHub(stats, only_configured=mode == "stock")
+        self._halves: dict[str, PluginHalf] = {}
+        self._halves_by_slot: dict[int, PluginHalf] = {}
+        if mode == "extended":
+            self._bind_halves()
         connection.add_close_callback(self._events.close)
+        connection.add_close_callback(self._fail_requests)
         connection.set_router(self._route)
+
+    # --- plugins
+
+    def plugin(self, name: str) -> PluginHalf:
+        """The client half bound to the board's plugin `name`, created once per board.
+
+        Raises `NotSupported` in stock mode or when the board has no plugin `name`, `IncompatiblePlugin` when the
+        registered half's major differs from the board's, and `ValueError` when no half of that name was registered.
+        """
+        if self.mode != "extended":
+            raise NotSupported("plugins need extended mode")
+        info = self.plugins_available.get(name)
+        if info is None:
+            raise NotSupported(f"the board has no plugin {name!r}")
+        cls = self._half_classes.get(name)
+        if cls is None:
+            raise ValueError(f"no client half for plugin {name!r}: pass it to connect(plugins=[...])")
+        if cls.major != info.major:
+            raise IncompatiblePlugin(
+                f"plugin {name!r} is {info.major}.{info.minor} on the board, the half is {cls.major}.x"
+            )
+        return self._halves[name]
+
+    def _bind_halves(self) -> None:
+        for name, cls in self._half_classes.items():
+            info = self.plugins_available.get(name)
+            if info is None or info.major != cls.major:
+                continue
+            half = cls(self, info.slot)
+            self._halves[name] = half
+            self._halves_by_slot[info.slot] = half
+            self._events.subscribe(("plugin", info.slot), lambda e, h=half: h.on_report(e.sub, e.data))
+
+    def _fail_requests(self) -> None:
+        for half in self._halves.values():
+            half._fail_requests(ConnectionLost("connection closed while a plugin request was pending"))
 
     # --- chains
 
@@ -120,26 +164,83 @@ class Board:
     # --- internals used by chains
 
     def _route(self, rid: int, payload: bytes) -> None:
+        if rid == wire.RPT.PLUGIN_REPORT and self._halves_by_slot:
+            report = wire.decode_plugin_report(payload)
+            half = self._halves_by_slot.get(report.slot)
+            if half is not None and half._take(report.data):
+                return
         if not self._chains.handle(rid, payload):
             self._events.handle(rid, payload, asyncio.get_running_loop().time())
 
-    def _set_pin_kind(self, gpio: int, kind: str | None) -> None:
+    def _set_pin_kind(self, gpio: int, kind: str | None) -> Callable[[], None]:
+        """Record what `gpio` is set up as; returns the undo (puts back the earlier kind unless it changed again)."""
+        before = self._pin_kinds.get(gpio)
         if kind is None:
             self._pin_kinds.pop(gpio, None)
         else:
             self._pin_kinds[gpio] = kind
 
-    def _pwm_channel(self, gpio: int) -> int:
-        if gpio in self._pwm_channels:
-            return self._pwm_channels[gpio]
-        free = sorted(set(range(PWM_CHANNELS)) - set(self._pwm_channels.values()))
-        if not free:
-            raise TelemetrixError(f"no free PWM channel: all {PWM_CHANNELS} are in use")
-        self._pwm_channels[gpio] = free[0]
-        return free[0]
+        def undo() -> None:
+            if self._pin_kinds.get(gpio) != kind:
+                return
+            if before is None:
+                self._pin_kinds.pop(gpio, None)
+            else:
+                self._pin_kinds[gpio] = before
 
-    def _pwm_release(self, gpio: int) -> None:
-        self._pwm_channels.pop(gpio, None)
+        return undo
+
+    @property
+    def _pwm_limit(self) -> int:
+        """Stock firmware takes the client's channel (16 on the ESP32); our server picks its own: only its limit."""
+        if self.mode == "stock":
+            return PWM_CHANNELS
+        return self.limits.get("pwm_channels", 256)
+
+    def _pwm_allocate(self, gpio: int) -> tuple[int, Callable[[], None] | None]:
+        """The channel of `gpio`, allocating the lowest free one; the undo frees a new allocation."""
+        if gpio in self._pwm_channels:
+            return self._pwm_channels[gpio], None
+        free = sorted(set(range(self._pwm_limit)) - set(self._pwm_channels.values()))
+        if not free:
+            raise TelemetrixError(f"no free PWM channel: all {self._pwm_limit} are in use")
+        channel = free[0]
+        self._pwm_channels[gpio] = channel
+
+        def undo() -> None:
+            if self._pwm_channels.get(gpio) == channel:
+                del self._pwm_channels[gpio]
+
+        return channel, undo
+
+    def _pwm_release(self, gpio: int) -> Callable[[], None] | None:
+        """Free the channel of `gpio`; the undo takes it back when nobody took it meanwhile."""
+        channel = self._pwm_channels.pop(gpio, None)
+        if channel is None:
+            return None
+
+        def undo() -> None:
+            if gpio not in self._pwm_channels and channel not in self._pwm_channels.values():
+                self._pwm_channels[gpio] = channel
+
+        return undo
+
+    def _forget_pins(self) -> Callable[[], None]:
+        """A RESET: no pin kinds, PWM channels or configured pins any more; the undo merges them back."""
+        kinds, channels = dict(self._pin_kinds), dict(self._pwm_channels)
+        self._pin_kinds.clear()
+        self._pwm_channels.clear()
+        undo_configured = self._events.forget_configured()
+
+        def undo() -> None:
+            for gpio, kind in kinds.items():
+                self._pin_kinds.setdefault(gpio, kind)
+            for gpio, channel in channels.items():
+                if gpio not in self._pwm_channels and channel not in self._pwm_channels.values():
+                    self._pwm_channels[gpio] = channel
+            undo_configured()
+
+        return undo
 
     @property
     def closed(self) -> bool:
