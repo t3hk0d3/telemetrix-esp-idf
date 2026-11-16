@@ -3,8 +3,7 @@
 
 #include "tmx_drv.h"
 
-/** The chip driver table; tmx_drv_default points at it. Operations of peripherals not yet implemented report
- *  ESP_ERR_NOT_SUPPORTED. */
+/** The chip driver table; tmx_drv_default points at it. */
 extern const tmx_drv_t tmx_drv_esp;
 
 /* GPIO */
@@ -26,5 +25,29 @@ void esp_ledc_timer_free(uint8_t speed_mode, uint8_t timer);
 esp_err_t esp_adc_init(const telemetrix_profile_t *p);
 void esp_adc_deinit(void);
 esp_err_t esp_adc_read(uint8_t unit, uint8_t channel, int *raw);
+
+/* I2C: a bus handle from the grant is never deleted, only the device handles the driver created */
+esp_err_t esp_i2c_open(uint8_t bus, const telemetrix_i2c_bus_t *grant, int8_t sda, int8_t scl);
+esp_err_t esp_i2c_read(uint8_t bus, uint8_t addr, uint8_t reg, bool stop, uint8_t *data, size_t n,
+                       uint16_t timeout_ms);
+esp_err_t esp_i2c_write(uint8_t bus, uint8_t addr, const uint8_t *data, size_t n, uint16_t timeout_ms);
+void esp_i2c_close(uint8_t bus);
+
+/* 1-wire: init takes the RMT TX grant, deinit closes every bus */
+void esp_onewire_init(const telemetrix_profile_t *p);
+void esp_onewire_deinit(void);
+esp_err_t esp_ow_open(uint8_t bus, uint8_t gpio);
+bool esp_ow_reset(uint8_t bus);
+void esp_ow_write(uint8_t bus, uint8_t byte, bool power);
+uint8_t esp_ow_read(uint8_t bus);
+bool esp_ow_search(uint8_t bus, uint8_t rom[8]);
+void esp_ow_reset_search(uint8_t bus);
+void esp_ow_close(uint8_t bus);
+
+/* DHT and sonar: start without blocking, complete once through tmx_completion_post; deinit frees the RMT channel, the
+ * timers and the GPIO handler */
+esp_err_t esp_dht_start(uint8_t gpio, uint32_t token);
+esp_err_t esp_sonar_start(uint8_t trig, uint8_t echo, uint32_t token);
+void esp_pulse_deinit(void);
 
 #endif

@@ -3,3 +3,7 @@ description: Telemetrix4Esp32-compatible server over TCP for ESP-IDF
 license: AGPL-3.0-or-later
 dependencies:
   idf: ">=6.1"
+  espressif/onewire_bus:
+    version: "^1.0"
+    rules:
+      - if: "target != linux"

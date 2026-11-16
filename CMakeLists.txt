@@ -16,7 +16,7 @@ if(IDF_TARGET STREQUAL "linux")
     set(tmx_drv_requires "")
 else()
     file(GLOB tmx_drv_srcs "${CMAKE_CURRENT_LIST_DIR}/src/drivers/esp/*.c")
-    set(tmx_drv_requires esp_driver_gpio esp_driver_ledc esp_adc)
+    set(tmx_drv_requires esp_driver_gpio esp_driver_ledc esp_driver_i2c esp_driver_rmt esp_adc esp_timer esp_rom)
 endif()
 
 idf_component_register(SRCS ${tmx_proto_srcs} ${tmx_core_srcs} ${tmx_adapter_srcs} ${tmx_drv_srcs} ${tmx_net_srcs}
