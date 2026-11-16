@@ -54,7 +54,8 @@ typedef struct {
 
 typedef struct {
     uint8_t unit;
-    void *handle;                 /**< application-owned adc_oneshot_unit_handle_t, or NULL: the component makes its own */
+    /** application-owned adc_oneshot_unit_handle_t, or NULL: the component makes its own */
+    void *handle;
 } telemetrix_adc_grant_t;
 
 typedef struct {
@@ -122,7 +123,8 @@ typedef struct {
 
 typedef struct {
     uint8_t gpio;
-    /** "input", "input_pullup", "input_pulldown", "output", "analog", "pwm", "servo", "i2c", "one_wire", "sonar", "dht" */
+    /** "input", "input_pullup", "input_pulldown", "output", "analog", "pwm", "servo", "i2c", "one_wire", "sonar",
+     *  "dht" */
     const char *use;
 } telemetrix_pin_use_t;
 

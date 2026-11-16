@@ -20,8 +20,16 @@ lint: ## astyle and ruff through pre-commit
 test-host: ## Host unit tests on the ESP-IDF linux target
 	$(IDF) tools/run_host_tests.sh
 
+FUZZ_BUILD ?= test/fuzz/build
+FUZZ_TARGETS ?= fuzz_frame
+
 fuzz: ## Fuzz the frame assembler and the adapter (60 s per target)
-	@echo "fuzz: not yet"
+	cmake -S test/fuzz -B $(FUZZ_BUILD) -DCMAKE_C_COMPILER=clang
+	cmake --build $(FUZZ_BUILD)
+	for t in $(FUZZ_TARGETS); do \
+		mkdir -p $(FUZZ_BUILD)/work/$$t; \
+		$(FUZZ_BUILD)/$$t -max_total_time=60 $(FUZZ_BUILD)/work/$$t test/fuzz/corpus/$$t; \
+	done
 
 host-server: ## Run the server on the linux target with fake drivers
 	@echo "host-server: not yet"
