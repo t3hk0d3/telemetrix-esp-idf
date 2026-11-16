@@ -49,11 +49,21 @@ $(VENV)/.installed: tools/compat/requirements.txt
 test-integration: host-server $(VENV)/.installed ## pytest integration tests against the host server
 	$(VENV)/bin/python -m pytest tools/tests
 
-client-lint: ## ruff format check and ruff check on client/ (not yet)
-	@echo "client-lint: not yet"
+CLIENT_VENV ?= client/.venv
 
-client-test: ## Client unit tests (not yet)
-	@echo "client-test: not yet"
+$(CLIENT_VENV)/.installed: client/pyproject.toml
+	if command -v uv >/dev/null; then \
+		uv venv --allow-existing $(CLIENT_VENV) && uv pip install --python $(CLIENT_VENV)/bin/python -e "client[dev]"; \
+	else \
+		python3 -m venv $(CLIENT_VENV) && $(CLIENT_VENV)/bin/pip install -e "client[dev]"; \
+	fi
+	touch $@
+
+client-lint: $(CLIENT_VENV)/.installed ## ruff format check and ruff check on client/
+	cd client && .venv/bin/ruff format --check . && .venv/bin/ruff check .
+
+client-test: $(CLIENT_VENV)/.installed ## Client unit tests
+	cd client && .venv/bin/python -m pytest tests/unit
 
 client-integration: ## Client integration tests against the host server (not yet)
 	@echo "client-integration: not yet"

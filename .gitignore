@@ -9,3 +9,6 @@ __pycache__/
 .superpowers/
 tools/.venv/
 build-*/
+client/.venv/
+client/dist/
+*.egg-info/

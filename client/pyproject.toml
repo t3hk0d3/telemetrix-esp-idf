@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "telemetrix-idf-client"
+version = "0.1.0"
+description = "Asyncio client for the telemetrix-esp-idf server"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-or-later"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/telemetrix_idf"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+
+[tool.pytest.ini_options]
+# strict: async tests carry an explicit pytest.mark.asyncio (STYLEGUIDE.md).
+asyncio_mode = "strict"
+testpaths = ["tests/unit"]
