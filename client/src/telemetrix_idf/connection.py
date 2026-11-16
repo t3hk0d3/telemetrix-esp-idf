@@ -2,13 +2,15 @@
 
 The reader task feeds a `PacketParser` and offers each report first to the pending "expect" waiters, in registration
 order (the first whose matcher returns a value consumes the report), then to the router (`set_router`, default: drop).
-Chains and events (chain.py, events.py) install the router. A `ProtocolError` raised by a matcher or the router is
-logged and counted in `stats.protocol_errors`; the reader keeps going. On EOF or a socket error every pending waiter
-fails with `ConnectionLost` and the connection is closed.
+The board installs the router (chains and events, chain.py and events.py). A `ProtocolError` raised by a matcher is
+logged and counted in `stats.protocol_errors`, and the report goes on to the later waiters and the router; one raised
+by the router is counted the same way. The reader keeps going. However the reader ends (EOF, a socket error, a bug,
+cancellation), every pending waiter fails with `ConnectionLost` and the connection is closed.
 
 Handshake: exactly one packet, `GET_FIRMWARE_VERSION [0xA7, 1, 0]`; every report before the FIRMWARE report is
-dropped (no router is installed yet). Discovery reads every CAPABILITIES page with direct GET_CAPABILITIES requests
-before `connect()` returns.
+dropped (no router is installed yet). A FIRMWARE report that is neither 3 nor 6 bytes long, or has the wrong magic,
+fails the handshake at once with `ProtocolError`. Discovery reads every CAPABILITIES page with direct
+GET_CAPABILITIES requests before `connect()` returns.
 """
 
 from __future__ import annotations
@@ -140,23 +142,40 @@ class Connection:
                 self._stats.skipped_bytes = self._parser.dropped
         except (OSError, ConnectionError) as e:
             why = f"connection lost: {e}"
-        self._shutdown(why)
+        except asyncio.CancelledError:
+            why = "connection closed"
+            raise
+        except Exception as e:
+            log.exception("reader failed")
+            why = f"reader failed: {e}"
+        finally:
+            self._shutdown(why)
 
     def _dispatch(self, rid: int, payload: bytes) -> None:
-        try:
-            for match, fut in self._waiters:
-                if fut.done():
-                    continue
+        for match, fut in list(self._waiters):
+            if fut.done():
+                continue
+            try:
                 result = match(rid, payload)
-                if result is not None:
-                    fut.set_result(result)
-                    return
+            except ProtocolError as e:
+                self._protocol_error(rid, payload, e)
+                continue
+            except Exception:
+                log.exception("report %d matcher failed", rid)
+                continue
+            if result is not None:
+                fut.set_result(result)
+                return
+        try:
             self._router(rid, payload)
         except ProtocolError as e:
-            self._stats.protocol_errors += 1
-            log.warning("dropped report %d %s: %s", rid, payload.hex(), e)
+            self._protocol_error(rid, payload, e)
         except Exception:
             log.exception("report %d handler failed", rid)
+
+    def _protocol_error(self, rid: int, payload: bytes, e: ProtocolError) -> None:
+        self._stats.protocol_errors += 1
+        log.warning("dropped report %d %s: %s", rid, payload.hex(), e)
 
 
 class BoardConnector:
@@ -191,8 +210,8 @@ def connect(
     Raises `HandshakeTimeout` when the probe gets no FIRMWARE report within `handshake_timeout` seconds,
     `IncompatibleFirmware` for an extension major other than 1 or stock firmware other than 3.x with x >= 2,
     `ConnectionLost` when the socket cannot be opened or closes, `asyncio.TimeoutError` when opening the socket or a
-    discovery page takes longer than `timeout`, and `ProtocolError` for a malformed or refused discovery page. The
-    socket is closed on every failure.
+    discovery page takes longer than `timeout`, and `ProtocolError` for a malformed FIRMWARE answer or a malformed or
+    refused discovery page. The socket is closed on every failure.
     `plugins` are the client plugin halves (plugins.py) bound to the board's plugins.
     """
 
@@ -216,8 +235,14 @@ async def _open(host: str, port: int, handshake_timeout: float, timeout: float, 
         raise
 
 
-def _match_firmware(rid: int, payload: bytes) -> wire.Firmware | None:
-    return wire.decode_firmware(payload) if rid == wire.RPT.FIRMWARE_REPORT else None
+def _match_firmware(rid: int, payload: bytes) -> wire.Firmware | ProtocolError | None:
+    """The FIRMWARE report, decoded; a malformed one is returned as its `ProtocolError` so the handshake fails now."""
+    if rid != wire.RPT.FIRMWARE_REPORT:
+        return None
+    try:
+        return wire.decode_firmware(payload)
+    except ProtocolError as e:
+        return e
 
 
 async def _handshake(
@@ -229,6 +254,8 @@ async def _handshake(
         fw = await asyncio.wait_for(answer, handshake_timeout)
     except asyncio.TimeoutError:
         raise HandshakeTimeout(f"no firmware report within {handshake_timeout} s") from None
+    if isinstance(fw, ProtocolError):
+        raise fw
     firmware = (fw.major, fw.minor, fw.build)
 
     if fw.ext is None:

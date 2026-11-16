@@ -370,3 +370,81 @@ async def _until(cond: Callable[[], object], timeout: float = 1.0) -> None:
             return
         await asyncio.sleep(0.005)
     raise AssertionError("condition not met in time")
+
+
+# --- malformed firmware answer and refused discovery -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "answer", [bytes([3, 5, 3, 2]), bytes([6, 5, 3, 2, 100, 0x00, 1]), bytes([7, 5, 3, 2, 100, 0x55, 1, 0])]
+)
+@pytest.mark.asyncio
+async def test_malformed_firmware_answer_raises_protocol_error_promptly(answer: bytes) -> None:
+    class Odd(FakeStockServer):
+        def handle(self, cmd: int, payload: bytes) -> bytes | None:
+            return answer if cmd == 5 else b""
+
+    async with Odd() as srv:
+        with pytest.raises(ProtocolError):
+            await connect("127.0.0.1", srv.port, handshake_timeout=2.0, timeout=0.5)
+        await asyncio.wait_for(srv.eof.wait(), 1)
+
+
+@pytest.mark.asyncio
+async def test_refused_discovery_page_raises_protocol_error() -> None:
+    async with FakeExtServer(pages=[b"", b""], refuse_pages={1}) as srv:
+        with pytest.raises(ProtocolError):
+            await connect("127.0.0.1", srv.port)
+
+
+@pytest.mark.asyncio
+async def test_refused_discovery_page_server_sees_eof() -> None:
+    async with FakeExtServer(pages=[b"", b""], refuse_pages={1}) as srv:
+        with pytest.raises(ProtocolError):
+            await connect("127.0.0.1", srv.port)
+        await asyncio.wait_for(srv.eof.wait(), 1)
+        assert srv.received[-1] == (59, bytes([1]))
+
+
+# --- reader robustness -------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bad_matcher_does_not_hide_report_from_later_waiter() -> None:
+    def bad(rid: int, payload: bytes) -> None:
+        raise ProtocolError("bad")
+
+    async with FakeStockServer() as srv, connect("127.0.0.1", srv.port) as board:
+        board.connection.expect(bad)
+        good = board.connection.expect(lambda rid, payload: payload if rid == 2 else None)
+        srv.push(bytes([3, 2, 4, 1]))
+        assert await asyncio.wait_for(good, 1) == bytes([4, 1])
+
+
+@pytest.mark.asyncio
+async def test_bad_matcher_does_not_hide_report_from_router() -> None:
+    got: list[int] = []
+
+    def bad(rid: int, payload: bytes) -> None:
+        raise ProtocolError("bad")
+
+    async with FakeStockServer() as srv, connect("127.0.0.1", srv.port) as board:
+        board.connection.expect(bad)
+        board.connection.set_router(lambda rid, payload: got.append(rid))
+        srv.push(bytes([3, 2, 4, 1]))
+        await _until(lambda: got)
+        assert (got, board.stats.protocol_errors) == ([2], 1)
+
+
+@pytest.mark.asyncio
+async def test_reader_crash_fails_waiters_with_connection_lost() -> None:
+    async with FakeStockServer() as srv, connect("127.0.0.1", srv.port) as board:
+
+        def boom(data: bytes) -> list[tuple[int, bytes]]:
+            raise RuntimeError("parser bug")
+
+        board.connection._parser.feed = boom  # type: ignore[method-assign]
+        fut = board.connection.expect(lambda rid, payload: None)
+        srv.push(bytes([3, 2, 4, 1]))
+        with pytest.raises(ConnectionLost):
+            await asyncio.wait_for(fut, 1)
