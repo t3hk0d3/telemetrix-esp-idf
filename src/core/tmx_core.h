@@ -70,4 +70,41 @@ void tmx_release_rmt_rx(tmx_claims_t *c);
  *  Never closes buses: that is the adapter's job. */
 void tmx_claims_release_all(tmx_claims_t *c);
 
+/** A software deadline on a free-running millisecond counter. Comparisons are wrap-safe (signed 32-bit difference), so
+ *  a deadline stays valid while it is less than 2^31 ms away. */
+typedef struct {
+    uint32_t due_ms;
+    bool armed;
+} tmx_deadline_t;
+
+/** Arm a deadline in_ms after now_ms. */
+void tmx_deadline_arm(tmx_deadline_t *d, uint32_t now_ms, uint32_t in_ms);
+/** True when the deadline is armed and now_ms has reached it. */
+bool tmx_deadline_due(const tmx_deadline_t *d, uint32_t now_ms);
+/** Milliseconds until the deadline, 0 when due, UINT32_MAX when unarmed. */
+uint32_t tmx_deadline_left(const tmx_deadline_t *d, uint32_t now_ms);
+
+#define TMX_COMPLETION_RING 16
+
+/** An asynchronous driver result (DHT frame, sonar echo) carrying the token given to dht_start or sonar_start. */
+typedef struct {
+    uint8_t kind;
+    uint32_t token;
+    esp_err_t err;
+    uint32_t value;
+    uint8_t data[5];
+} tmx_completion_t;
+
+/** Queue a completion. Callable from an ISR, a driver callback or another task. When the ring of 16 is full the new
+ *  completion is dropped and counted (queued ones keep their order). Calls the wake function afterwards. */
+void tmx_completion_post(const tmx_completion_t *c);
+/** Dequeue the oldest completion; false when empty. Network task only. */
+bool tmx_completion_take(tmx_completion_t *out);
+/** Register the function that tmx_completion_post calls after queueing; NULL restores the no-op. */
+void tmx_completion_set_wake(void (*fn)(void));
+/** Drop queued completions and zero the overflow count; the wake function stays. */
+void tmx_completion_reset(void);
+/** Completions dropped because the ring was full since the last reset. */
+uint32_t tmx_completion_overflows(void);
+
 #endif
