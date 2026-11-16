@@ -214,12 +214,16 @@ goes up. Never expose the port to an untrusted network or the internet; keep the
 and choose safe states for them.
 
 One client at a time: a second connection is accepted and closed with an RST (`SO_LINGER` 0, so no TIME_WAIT is left).
-Dead clients are found by TCP keepalive (idle 10 s, interval 2 s, count 3) and by the send-stall timeout: a client that
+Dead clients are found by TCP keepalive (idle 10 s, interval 2 s, count 3; the host tests check the socket options, the
+timing on lwIP is confirmed on the board pass) and by the send-stall timeout: a client that
 stops reading and leaves unsent data with no progress for `send_stall_ms` (10 s) is dropped. A stalled client and one
 whose socket fails are closed with an RST (`SO_LINGER` 0), so no closing socket keeps retransmitting to a dead peer;
 an orderly end, a kick and a stop close normally. Sends are non-blocking from
-a per-connection queue; replies are never dropped, digital and analog reports are coalesced to the latest value per
-pin when the queue is full, sonar and DHT keep the latest reading per device.
+a per-connection queue; replies are never dropped. Digital and analog reports are coalesced to the latest value per pin,
+sonar and DHT to the latest reading per device: a new report replaces the same pin's (or device's) report whenever one
+is still queued unsent, not only when the queue is full, and waits for room as the latest value when there is none. So
+while the socket is backed up a fast pulse (0, 1, 0) on a digital input can reach the client as just the final 0: the
+1 is overwritten before it is sent.
 
 ## Sockets and memory
 
