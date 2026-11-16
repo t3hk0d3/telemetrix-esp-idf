@@ -1,0 +1,2 @@
+# The fake sensors complete every 5 ms and the digital inputs are polled every 2 ms: a 1 ms tick keeps both honest.
+CONFIG_FREERTOS_HZ=1000

@@ -1,0 +1,3 @@
+telemetrix-esp32==2.1.1
+pytest==9.2.0
+pytest-timeout==2.4.0

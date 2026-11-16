@@ -33,11 +33,21 @@ fuzz: ## Fuzz the frame assembler and the adapter (60 s per target)
 	done; \
 	exit $$status
 
-host-server: ## Run the server on the linux target with fake drivers
-	@echo "host-server: not yet"
+host-server: ## Build the server for the linux target with the fake driver (host/server/build)
+	$(IDF) tools/build_host_server.sh
 
-test-integration: ## pytest integration tests against the host server
-	@echo "test-integration: not yet"
+VENV ?= tools/.venv
+
+$(VENV)/.installed: tools/compat/requirements.txt
+	if command -v uv >/dev/null; then \
+		uv venv --allow-existing $(VENV) && uv pip install --python $(VENV)/bin/python -r $<; \
+	else \
+		python3 -m venv $(VENV) && $(VENV)/bin/pip install -r $<; \
+	fi
+	touch $@
+
+test-integration: host-server $(VENV)/.installed ## pytest integration tests against the host server
+	$(VENV)/bin/python -m pytest tools/tests
 
 build-examples: ## Build every example for the targets it lists
 	@echo "build-examples: not yet"
