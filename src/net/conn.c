@@ -62,12 +62,15 @@ static bool fits(const tmx_conn_t *c, size_t n, size_t limit)
     return tmx_conn_pending(c) + n <= limit;
 }
 
+static void prune_keyed(tmx_conn_t *c);
+
 /** Move the unsent bytes to the start of the buffer. */
 static void compact(tmx_conn_t *c)
 {
     if (c->head == 0) {
         return;
     }
+    prune_keyed(c);                     /* entries that began leaving have no place after the move: never rewrite them */
     memmove(c->buf, c->buf + c->head, c->tail - c->head);
     for (uint8_t i = 0; i < c->n_keyed; i++) {
         c->keyed[i].off -= c->head;
@@ -220,6 +223,7 @@ tmx_conn_state_t tmx_conn_flush(tmx_conn_t *c, int fd, uint32_t now_ms, uint16_t
             if ((size_t)r < want) {
                 break;
             }
+            prune_keyed(c);         /* stale entries go before anything is appended */
             drain_pending(c);       /* the queue emptied: room for what waited */
         } else if (r == 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             break;

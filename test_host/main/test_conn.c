@@ -440,3 +440,26 @@ TEST_CASE("reset with pending keyed reports: they are forgotten", "[conn]")
     TEST_ASSERT_EQUAL(0, sent_n);
     conn_stop();
 }
+
+TEST_CASE("flush that empties a nearly full queue with a report pending, then a requeue of a sent key: no stale entry is "
+          "rewritten", "[conn]")
+{
+    conn_start(64);
+    fill_digital();                                     /* 48 bytes, keyed pins 0..11 */
+    for (int i = 0; i < 3; i++) {
+        reply_loop((uint8_t)i);                         /* 57 */
+    }
+    const uint8_t five[] = {4, 0, 0, 0, 0};
+    tmx_conn_queue(&conn, five, sizeof(five), true, TMX_COALESCE_NONE, 0);   /* 62: the tail is close to cap */
+    digital(40, 1);                                     /* pending: no room outside the reserve */
+    SCRIPT(62, -EAGAIN);                                /* sends 62, then the pending report needs a compaction */
+    TEST_ASSERT_EQUAL(TMX_CONN_PENDING, tmx_conn_flush(&conn, 3, 0, 1000));
+    TEST_ASSERT_EQUAL(4, tmx_conn_pending(&conn));
+    digital(0, 0);                                      /* pin 0 was sent: a new entry, not a rewrite of old bytes */
+    TEST_ASSERT_EQUAL_UINT32(0, conn.coalesced);
+    drain();
+    const uint8_t want[] = {3, 2, 40, 1, 3, 2, 0, 0};
+    TEST_ASSERT_EQUAL(8, sent_n);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, sent, sizeof(want));
+    conn_stop();
+}

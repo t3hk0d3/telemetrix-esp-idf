@@ -54,7 +54,7 @@ typedef struct tmx_conn {
     bool stalling;                              /**< bytes are queued; stall_since is the last progress or first try */
     uint32_t stall_since;
     tmx_send_fn send_fn;
-    uint32_t coalesced;                         /**< reports replaced or evicted for a newer value, since init */
+    uint32_t coalesced;                         /**< reports replaced in place or merged into a pending one for a newer value, since init */
     uint32_t dropped;                           /**< unkeyed non-reply reports lost for lack of room, since init */
 } tmx_conn_t;
 
