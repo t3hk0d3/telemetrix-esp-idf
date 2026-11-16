@@ -1,3 +1,4 @@
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -53,6 +54,9 @@ typedef struct {
 } fake_t;
 
 static fake_t fake;
+/* The fake is used from several tasks (the server task, a task completing sensors, a main task reading counters);
+ * this guards the call log, the pending starts and their counters. The fake exists on the linux target only. */
+static pthread_mutex_t fake_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void record(const char *fmt, ...)
 {
@@ -67,22 +71,26 @@ static void record(const char *fmt, ...)
     if ((size_t)n >= sizeof(line)) {
         n = sizeof(line) - 1;
     }
+    pthread_mutex_lock(&fake_lock);
     if (fake.log_len + (size_t)n + 1 >= sizeof(fake.log)) {
         fake.log_truncated = true;
-        return;
+    } else {
+        memcpy(fake.log + fake.log_len, line, (size_t)n);
+        fake.log_len += (size_t)n;
+        fake.log[fake.log_len++] = '\n';
+        fake.log[fake.log_len] = '\0';
     }
-    memcpy(fake.log + fake.log_len, line, (size_t)n);
-    fake.log_len += (size_t)n;
-    fake.log[fake.log_len++] = '\n';
-    fake.log[fake.log_len] = '\0';
+    pthread_mutex_unlock(&fake_lock);
 }
 
 void tmx_fake_reset(void)
 {
+    pthread_mutex_lock(&fake_lock);
     memset(&fake, 0, sizeof(fake));
     for (int i = 0; i < FAKE_PINS; i++) {
         fake.loop_src[i] = -1;
     }
+    pthread_mutex_unlock(&fake_lock);
 }
 
 void tmx_fake_set_level(uint8_t gpio, bool v)
@@ -132,12 +140,17 @@ void tmx_fake_sonar_echo(uint8_t trig, uint32_t us)
 
 void tmx_fake_complete_pending(void)
 {
+    /* take the pending starts under the lock, post them outside it: a start arriving meanwhile is kept for the next call */
+    typeof(fake.pending) taken;
+    pthread_mutex_lock(&fake_lock);
     size_t n = fake.n_pending;
+    memcpy(taken, fake.pending, n * sizeof(taken[0]));
     fake.n_pending = 0;
+    pthread_mutex_unlock(&fake_lock);
     for (size_t i = 0; i < n; i++) {
-        tmx_completion_t c = {.token = fake.pending[i].token};
-        uint8_t gpio = fake.pending[i].gpio;
-        if (fake.pending[i].dht) {
+        tmx_completion_t c = {.token = taken[i].token};
+        uint8_t gpio = taken[i].gpio;
+        if (taken[i].dht) {
             c.kind = TMX_COMPLETION_DHT;
             c.err = fake.dht_err[gpio];
             memcpy(c.data, fake.dht_frame[gpio], sizeof(c.data));
@@ -200,6 +213,7 @@ size_t tmx_fake_count(const char *name)
 {
     size_t len = strlen(name);
     size_t count = 0;
+    pthread_mutex_lock(&fake_lock);
     for (const char *p = fake.log; *p;) {
         if (strncmp(p, name, len) == 0 && p[len] == '(') {
             count++;
@@ -207,6 +221,7 @@ size_t tmx_fake_count(const char *name)
         const char *eol = strchr(p, '\n');
         p = eol ? eol + 1 : p + strlen(p);
     }
+    pthread_mutex_unlock(&fake_lock);
     return count;
 }
 
@@ -420,14 +435,18 @@ static void f_ow_close(uint8_t bus)
 
 static esp_err_t add_pending(bool dht, uint8_t gpio, uint32_t token)
 {
+    esp_err_t err = ESP_OK;
+    pthread_mutex_lock(&fake_lock);
     if (fake.n_pending >= FAKE_PENDING) {
-        return ESP_ERR_NO_MEM;
+        err = ESP_ERR_NO_MEM;
+    } else {
+        fake.pending[fake.n_pending].dht = dht;
+        fake.pending[fake.n_pending].gpio = gpio;
+        fake.pending[fake.n_pending].token = token;
+        fake.n_pending++;
     }
-    fake.pending[fake.n_pending].dht = dht;
-    fake.pending[fake.n_pending].gpio = gpio;
-    fake.pending[fake.n_pending].token = token;
-    fake.n_pending++;
-    return ESP_OK;
+    pthread_mutex_unlock(&fake_lock);
+    return err;
 }
 
 static esp_err_t f_dht_start(uint8_t gpio, uint32_t token)

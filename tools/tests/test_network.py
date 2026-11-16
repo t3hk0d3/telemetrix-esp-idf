@@ -8,9 +8,11 @@ from conftest import IO_TIMEOUT, Raw
 LOOP_PACKET = bytes([2, 0, 0x42])
 
 
-def expect_reset(conn):
-    """The server answered with RST and not with a byte."""
+def expect_reset(conn, send=b""):
+    """The server answers with RST and not with a byte; the send may already meet the reset."""
     with pytest.raises(ConnectionResetError):
+        if send:
+            conn.sock.sendall(send)
         assert conn.sock.recv(16) != b""
 
 
@@ -29,13 +31,16 @@ def test_second_connection_reset_and_counted(server, raw):
 def test_disallowed_peer_reset_before_read(make_server):
     srv = make_server("--allow", "10.0.0.0/8", "--allow", "192.168.0.0/16")
     conn = Raw(srv.port)
-    conn.sock.sendall(LOOP_PACKET)
-    expect_reset(conn)
+    # bytes that would change a counter if the server read them: three len-0 bytes are three dropped packets
+    expect_reset(conn, bytes(3) + LOOP_PACKET)
     conn.close()
 
     status = srv.status()
     assert status["refused_connections"] == 1
     assert status["client"] == "-"
+    assert status["dropped_packets"] == 0
+    assert status["ignored_commands"] == 0
+    assert status["refused_commands"] == 0
 
 
 def test_allowed_peer_is_served(make_server):

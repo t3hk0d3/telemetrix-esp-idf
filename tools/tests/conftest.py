@@ -27,18 +27,34 @@ class Server:
     """The host server process. Its stdout is read by a thread; SIGUSR2 makes it print one `status` line."""
 
     def __init__(self, *args):
-        self.port = free_port()
-        self.proc = subprocess.Popen(
-            [str(SERVER_ELF), "--port", str(self.port), *map(str, args)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        self.args = args
         self.lines = []
         self.cond = threading.Condition()
-        self.reader = threading.Thread(target=self._read, daemon=True)
-        self.reader.start()
-        self._wait_line(lambda line: line == f"listening {self.port}", 10)
+        # a free port can be taken between picking it and the server binding it: retry once with a new one
+        for attempt in (1, 2):
+            self.port = free_port()
+            self.lines.clear()
+            self.proc = subprocess.Popen(
+                [str(SERVER_ELF), "--port", str(self.port), *map(str, args)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.reader = threading.Thread(target=self._read, daemon=True)
+            self.reader.start()
+            try:
+                self._wait_line(lambda line: line == f"listening {self.port}", 10)
+                return
+            except BaseException:
+                self._kill()
+                if attempt == 2:
+                    raise
+
+    def _kill(self):
+        """Leave no process behind."""
+        self.proc.kill()
+        self.proc.wait()
+        self.reader.join(2)
 
     def _read(self):
         for line in self.proc.stdout:
@@ -149,8 +165,17 @@ def make_server():
         return srv
 
     yield make
-    for srv in started:
-        assert srv.stop() == 0
+    failures = []
+    for srv in started:  # every server is stopped, whatever happens to the others
+        try:
+            code = srv.stop()
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            srv._kill()
+            failures.append(f"server on port {srv.port}: {exc!r}")
+        else:
+            if code != 0:
+                failures.append(f"server on port {srv.port} exited with {code}")
+    assert not failures, "; ".join(failures)
 
 
 @pytest.fixture

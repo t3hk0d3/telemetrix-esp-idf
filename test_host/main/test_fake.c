@@ -1,3 +1,4 @@
+#include <pthread.h>
 #include <string.h>
 
 #include "fake/tmx_drv_fake.h"
@@ -227,4 +228,30 @@ TEST_CASE("On tmx_fake_reset: pending starts are forgotten", "[fake]")
     tmx_fake_reset();
     tmx_fake_complete_pending();
     TEST_ASSERT_FALSE(tmx_completion_take(&c));
+}
+
+#define HAMMER_CALLS 200
+
+static void *hammer(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < HAMMER_CALLS; i++) {
+        d->gpio_set(4, i & 1);
+        tmx_fake_count("gpio_set");
+    }
+    return NULL;
+}
+
+TEST_CASE("On calls from several threads at once: every call is recorded and the log stays intact", "[fake]")
+{
+    pthread_t t[3];
+    tmx_fake_reset();
+    for (int i = 0; i < 3; i++) {
+        TEST_ASSERT_EQUAL(0, pthread_create(&t[i], NULL, hammer, NULL));
+    }
+    for (int i = 0; i < 3; i++) {
+        pthread_join(t[i], NULL);
+    }
+    TEST_ASSERT_EQUAL(3 * HAMMER_CALLS, tmx_fake_count("gpio_set"));
+    TEST_ASSERT_FALSE(tmx_fake_log_truncated());
 }
