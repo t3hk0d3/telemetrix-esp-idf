@@ -101,6 +101,7 @@ void tmx_server_free(tmx_server_t *s)
     }
     tmx_completion_set_wake(NULL);
     tmx_emit_ring_bump(false);
+    tmx_emit_ring_register(NULL);       /* before the free: a late emit_async or wake fails without touching a ctx */
     tmx_emit_ring_set_wake(NULL);
     tmx_wake_close();
     if (s->listener >= 0) {
@@ -217,6 +218,7 @@ esp_err_t tmx_server_new(const telemetrix_profile_t *profile, const telemetrix_c
     }
     tmx_completion_set_wake(tmx_net_wake);
     tmx_emit_ring_set_wake(tmx_net_wake);
+    tmx_emit_ring_register(&s->adapter.plugins);
     if (s->cfg.server_enabled) {
         s->listener = tmx_sock_listen(s->cfg.port);
         if (s->listener < 0 || s->listener >= FD_SETSIZE) {

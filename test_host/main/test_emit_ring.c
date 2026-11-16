@@ -111,3 +111,53 @@ TEST_CASE("tmx_emit_ring on a generation bump with a full ring: the new generati
     }
     TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM, tmx_emit_ring_put(0, 1, NULL, 0));
 }
+
+static int hook_calls;
+
+/** Runs inside a put after it read the generation: a session ends and a new one starts right there. */
+static void bump_twice(void)
+{
+    hook_calls++;
+    tmx_emit_ring_bump(false);
+    tmx_emit_ring_bump(true);
+}
+
+TEST_CASE("tmx_emit_ring put racing a session change: the racing entry is stale, live entries survive, 8 fit",
+          "[emit_ring]")
+{
+    const uint8_t live = 1, racing = 2, fresh = 3;
+    start();
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_emit_ring_put(0, 0, &live, 1));
+    hook_calls = 0;
+    tmx_emit_ring_set_put_hook(bump_twice);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_emit_ring_put(0, 0, &racing, 1));
+    tmx_emit_ring_set_put_hook(NULL);
+    TEST_ASSERT_EQUAL(1, hook_calls);
+    for (int i = 0; i < 8; i++) {
+        TEST_ASSERT_EQUAL(ESP_OK, tmx_emit_ring_put(0, 0, &fresh, 1));
+    }
+    TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM, tmx_emit_ring_put(0, 0, &fresh, 1));
+    tmx_emit_entry_t e;
+    for (int i = 0; i < 8; i++) {
+        TEST_ASSERT_TRUE(tmx_emit_ring_take(&e));
+        TEST_ASSERT_EQUAL(3, e.data[0]);
+    }
+    TEST_ASSERT_FALSE(tmx_emit_ring_take(&e));
+}
+
+TEST_CASE("tmx_emit_ring put racing a session change: entries put in the new session are never dropped by it",
+          "[emit_ring]")
+{
+    const uint8_t racing = 2, fresh = 3;
+    start();
+    tmx_emit_ring_bump(true);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_emit_ring_put(0, 0, &fresh, 1));
+    tmx_emit_ring_set_put_hook(bump_twice);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_emit_ring_put(0, 0, &racing, 1));
+    tmx_emit_ring_set_put_hook(NULL);
+    tmx_emit_entry_t e;
+    TEST_ASSERT_FALSE(tmx_emit_ring_take(&e));          /* both from sessions that have ended */
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_emit_ring_put(0, 0, &fresh, 1));
+    TEST_ASSERT_TRUE(tmx_emit_ring_take(&e));
+    TEST_ASSERT_EQUAL(3, e.data[0]);
+}

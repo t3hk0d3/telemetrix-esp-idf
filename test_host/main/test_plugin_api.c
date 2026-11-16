@@ -144,6 +144,7 @@ static void start(void)
     wakes = 0;
     tmx_emit_ring_reset();
     tmx_emit_ring_set_wake(count_wake);
+    tmx_emit_ring_register(&a.plugins);
 }
 
 /** As the net layer does on entering extended mode: the ring opens for the session. */
@@ -299,6 +300,15 @@ TEST_CASE("PLUGIN to a plugin without a command handler: ERROR NOT_IN_SCOPE with
     start_ext();
     PLUGIN(3, 0);
     assert_report(0, want, sizeof(want));
+}
+
+TEST_CASE("PLUGIN in stock mode with a registered plugin: the handler is never reached", "[plugin_api]")
+{
+    start();
+    PLUGIN(1, 7, 0xa1);
+    TEST_ASSERT_EQUAL(0, rec1.commands);
+    TEST_ASSERT_EQUAL(0, ctx(1)->commands);
+    TEST_ASSERT_EQUAL(0, n_reports);
 }
 
 /* ---- session: release (disconnect, RESET) ---- */
@@ -551,6 +561,35 @@ TEST_CASE("telemetrix_plugin_emit_async in stock mode: ESP_ERR_INVALID_STATE, no
     TEST_ASSERT_EQUAL(0, n_reports);
 }
 
+TEST_CASE("telemetrix_plugin_emit_async on a ctx no longer registered (server stopped): ESP_ERR_INVALID_STATE, "
+          "nothing counted", "[plugin_api]")
+{
+    start_ext();
+    for (int i = 0; i < TMX_EMIT_RING_ENTRIES; i++) {
+        TEST_ASSERT_EQUAL(ESP_OK, telemetrix_plugin_emit_async(ctx(1), 0, NULL, 0));
+    }
+    tmx_emit_ring_register(NULL);
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, telemetrix_plugin_emit_async(ctx(1), 0, NULL, 0));
+    TEST_ASSERT_EQUAL(0, ctx(1)->async_dropped);
+}
+
+TEST_CASE("telemetrix_plugin_wake on a ctx no longer registered: no wake flag, no network wake", "[plugin_api]")
+{
+    start_ext();
+    tmx_emit_ring_register(NULL);
+    telemetrix_plugin_wake(ctx(1));
+    TEST_ASSERT_FALSE(ctx(1)->wake);
+    TEST_ASSERT_EQUAL(0, wakes);
+}
+
+TEST_CASE("test plugin release with a sub-2 task pending: waits until the task's emit is done", "[plugin_api]")
+{
+    start_ext();
+    PLUGIN(0, 2, 0, 1);
+    disconnect();
+    TEST_ASSERT_EQUAL(1, test_plugin_async_done());
+}
+
 TEST_CASE("telemetrix_plugin_emit_async of data over 251 bytes: ESP_ERR_INVALID_ARG", "[plugin_api]")
 {
     uint8_t data[252] = {0};
@@ -566,8 +605,8 @@ TEST_CASE("budget on a handler taking 50 ms (fake micros): overruns +1, max_us a
     tmx_fake_set_micros_step(1000);
     PLUGIN(0, 4);
     TEST_ASSERT_EQUAL(1, ctx(0)->overruns);
-    /* 50000 of busy work plus the steps of the timing calls themselves */
-    TEST_ASSERT_UINT32_WITHIN(5000, 52500, ctx(0)->max_us);
+    /* 50 steps of busy work plus the plugin's first micros call and the adapter's two timing calls */
+    TEST_ASSERT_EQUAL_UINT32(52000, ctx(0)->max_us);
 }
 
 TEST_CASE("budget on a handler taking 50 ms: the command completes and the next LOOP is answered", "[plugin_api]")

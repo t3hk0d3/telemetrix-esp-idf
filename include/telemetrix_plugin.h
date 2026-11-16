@@ -31,7 +31,8 @@ typedef struct telemetrix_plugin {
      *  telemetrix_plugin_wake. UINT32_MAX = no further call until a wake. NULL = none. */
     uint32_t (*poll)(telemetrix_plugin_ctx_t *ctx, uint32_t now_ms);
     /** End of a session (disconnect, RESET, stop), in slot order, before the server releases the pins and channels.
-     *  NULL = none. */
+     *  The plugin must stop its own tasks that call telemetrix_plugin_emit_async or telemetrix_plugin_wake (or wait for
+     *  them) before this returns: after the release hook at stop the ctx is gone. NULL = none. */
     void (*release)(telemetrix_plugin_ctx_t *ctx);
     void *user;
 } telemetrix_plugin_t;
@@ -39,16 +40,16 @@ typedef struct telemetrix_plugin {
 /** The descriptor's user pointer. */
 void *telemetrix_plugin_user(telemetrix_plugin_ctx_t *ctx);
 
-/** Claim a profile pin for the named capability. ESP_ERR_NOT_SUPPORTED: not a profile pin or its entry does not grant
+/** Network task only (command, poll, release). Claim a profile pin for the named capability. ESP_ERR_NOT_SUPPORTED: not a profile pin or its entry does not grant
  *  named_cap; ESP_ERR_INVALID_STATE: held by another use or another plugin. Claiming a pin the plugin already holds is
  *  ESP_OK. The plugin drives the pin itself; the server puts it back in its safe state on release. */
 esp_err_t telemetrix_plugin_claim_pin(telemetrix_plugin_ctx_t *ctx, uint8_t gpio, const char *named_cap);
-/** Give a pin the plugin holds back; it goes to its safe state. Other pins are left alone. */
+/** Network task only. Give a pin the plugin holds back; it goes to its safe state. Other pins are left alone. */
 void telemetrix_plugin_release_pin(telemetrix_plugin_ctx_t *ctx, uint8_t gpio);
 
-/** Count an RMT RX or TX channel against the grant. ESP_ERR_NOT_FOUND when none is left. */
+/** Network task only. Count an RMT RX or TX channel against the grant. ESP_ERR_NOT_FOUND when none is left. */
 esp_err_t telemetrix_plugin_claim_rmt(telemetrix_plugin_ctx_t *ctx, bool tx);
-/** Give back one RMT channel the plugin holds (no-op when it holds none of that kind). */
+/** Network task only. Give back one RMT channel the plugin holds (no-op when it holds none of that kind). */
 void telemetrix_plugin_release_rmt(telemetrix_plugin_ctx_t *ctx, bool tx);
 
 /** Queue PLUGIN_REPORT [slot, sub, data...] as a reply. Network task only (command, poll, release).
@@ -56,10 +57,12 @@ void telemetrix_plugin_release_rmt(telemetrix_plugin_ctx_t *ctx, bool tx);
 esp_err_t telemetrix_plugin_emit(telemetrix_plugin_ctx_t *ctx, uint8_t sub, const uint8_t *data, size_t n);
 /** Queue PLUGIN_REPORT from any task (not an ISR) and wake the network task, which sends it. Waits at most 10 ms for
  *  the ring lock (ESP_ERR_TIMEOUT). ESP_ERR_NO_MEM when the ring of 8 is full (counted in async_dropped);
- *  ESP_ERR_INVALID_STATE when no client is in extended mode; ESP_ERR_INVALID_ARG as for telemetrix_plugin_emit.
- *  Reports queued in a session that has ended are dropped. */
+ *  ESP_ERR_INVALID_STATE when no client is in extended mode or the server has stopped; ESP_ERR_INVALID_ARG as for
+ *  telemetrix_plugin_emit. Reports queued in a session that has ended are dropped. The ctx is valid only until the
+ *  plugin's release hook at stop returns; a late call fails with ESP_ERR_INVALID_STATE without touching it. */
 esp_err_t telemetrix_plugin_emit_async(telemetrix_plugin_ctx_t *ctx, uint8_t sub, const uint8_t *data, size_t n);
-/** Ask for a poll call soon; any task. */
+/** Ask for a poll call soon; any task (not an ISR). Does nothing once the server has stopped (same ctx rule as
+ *  telemetrix_plugin_emit_async). */
 void telemetrix_plugin_wake(telemetrix_plugin_ctx_t *ctx);
 /** Status text shown in telemetrix_get_status: at most 47 characters are copied; NULL clears it. Network task only. */
 void telemetrix_plugin_set_status(telemetrix_plugin_ctx_t *ctx, const char *text);

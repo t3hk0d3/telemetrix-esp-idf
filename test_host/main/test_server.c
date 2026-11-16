@@ -500,3 +500,33 @@ TEST_CASE("telemetrix_start with plugins: the plugin array and the pins' named a
     TEST_ASSERT_EQUAL(1, test_plugin_releases());
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
 }
+
+TEST_CASE("server stop with a client in a plugin session: the release hooks run; a late emit_async and wake on the "
+          "old ctx fail cleanly", "[server]")
+{
+    const telemetrix_plugin_t *list[] = {&test_plugin_echo};
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.plugins = list;
+    cfg.n_plugins = 1;
+    test_plugin_reset();
+    start_server(&cfg);
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    const uint8_t cmds[] = {
+        4, TMX_CMD_GET_FIRMWARE_VERSION, TMX_EXT_MAGIC, 1, 0,
+        4, TMX_CMD_PLUGIN, 0, 0, 0x42,                 /* echo: the plugin learns its ctx */
+    };
+    TEST_ASSERT_EQUAL(sizeof(cmds), send(c, cmds, sizeof(cmds), 0));
+    uint8_t got[8 + 5];
+    TEST_ASSERT_EQUAL(0, read_n(c, got, sizeof(got)));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+    TEST_ASSERT_EQUAL(1, test_plugin_releases());
+    telemetrix_plugin_ctx_t *old = test_plugin_ctx();
+    TEST_ASSERT_NOT_NULL(old);
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, telemetrix_plugin_emit_async(old, 0, NULL, 0));
+    telemetrix_plugin_wake(old);
+    close(c);
+}

@@ -10,7 +10,8 @@
  *  2 [req u16]  emit_async [req_hi, req_lo, 0x55] from a FreeRTOS task (directly under TMX_FUZZ)
  *  3 [gpio]     claim the pin as test.led and drive it high
  *  4            busy until the driver's micros advanced 50000
- *  5            enable the poll hook: PLUGIN_REPORT sub 9 [] every 1000 ms (release disables it) */
+ *  5            enable the poll hook: PLUGIN_REPORT sub 9 [] every 1000 ms (release disables it)
+ *  The release hook waits (at most 1 s) for pending sub-2 tasks, so none touches the ctx after it returns. */
 extern const telemetrix_plugin_t test_plugin_echo;
 
 #define TEST_PLUGIN_REFUSE_CODE 7
@@ -26,5 +27,7 @@ unsigned test_plugin_releases(void);
 /** Async emits that finished since the last reset, and the result of the last one. */
 unsigned test_plugin_async_done(void);
 esp_err_t test_plugin_async_last(void);
+/** The ctx of the last command (NULL after a reset); may be stale once the server stopped. */
+telemetrix_plugin_ctx_t *test_plugin_ctx(void);
 
 #endif

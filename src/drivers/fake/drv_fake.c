@@ -506,18 +506,25 @@ static void f_release(void)
 
 static uint64_t f_micros(void)
 {
+    pthread_mutex_lock(&fake_lock);
+    uint64_t now;
     if (fake.micros_step == 0) {
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
-        return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+        now = (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+    } else {
+        fake.micros_now += fake.micros_step;
+        now = fake.micros_now;
     }
-    fake.micros_now += fake.micros_step;
-    return fake.micros_now;
+    pthread_mutex_unlock(&fake_lock);
+    return now;
 }
 
 void tmx_fake_set_micros_step(uint32_t us)
 {
+    pthread_mutex_lock(&fake_lock);
     fake.micros_step = us;
+    pthread_mutex_unlock(&fake_lock);
 }
 
 static esp_err_t f_init(const telemetrix_profile_t *p)

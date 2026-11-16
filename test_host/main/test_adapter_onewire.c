@@ -225,3 +225,15 @@ TEST_CASE("Release with the 1-wire bus never opened: no ow_close", "[adapter]")
     tmx_adapter_release(&fx_a);
     TEST_ASSERT_EQUAL(0, tmx_fake_count("ow_close"));
 }
+
+TEST_CASE("ONE_WIRE_INIT with no RMT TX channel left: EXHAUSTED, the RX channel and the pin released, no open",
+          "[adapter]")
+{
+    static const uint8_t p[] = {4};
+    fx_start_buses(NULL, &fixed_ow);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_rmt_tx(&fx_a.claims));     /* the grant has one TX channel */
+    TEST_ASSERT_EQUAL(TELEMETRIX_REASON_EXHAUSTED, tmx_adapter_command(&fx_a, TMX_CMD_ONE_WIRE_INIT, p, 1, 0));
+    TEST_ASSERT_EQUAL(TMX_USE_NONE, tmx_pin_use(&fx_a.claims, 23));
+    TEST_ASSERT_EQUAL(0, fx_a.claims.rmt_rx_used);
+    TEST_ASSERT_EQUAL(0, tmx_fake_count("ow_open"));
+}

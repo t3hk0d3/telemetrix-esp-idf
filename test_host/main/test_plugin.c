@@ -16,6 +16,7 @@ static struct {
     unsigned releases;
     volatile unsigned async_done;
     volatile esp_err_t async_last;
+    unsigned pending;           /**< atomic: sub-2 tasks not yet finished with the ctx */
     telemetrix_plugin_ctx_t *ctx;
 } st = {.led = -1};
 
@@ -27,6 +28,12 @@ void test_plugin_reset(void)
     st.async_done = 0;
     st.async_last = ESP_OK;
     st.ctx = NULL;
+    st.pending = 0;
+}
+
+telemetrix_plugin_ctx_t *test_plugin_ctx(void)
+{
+    return st.ctx;
 }
 
 unsigned test_plugin_releases(void)
@@ -55,21 +62,33 @@ static void async_emit(telemetrix_plugin_ctx_t *ctx, uint16_t req)
 static void async_task(void *arg)
 {
     async_emit(st.ctx, (uint16_t)(uintptr_t)arg);
+    __atomic_fetch_sub(&st.pending, 1, __ATOMIC_RELEASE);     /* last touch of the ctx */
     vTaskDelete(NULL);
 }
 #endif
 
 static telemetrix_reason_t spawn_async(telemetrix_plugin_ctx_t *ctx, uint16_t req)
 {
-    st.ctx = ctx;
 #ifdef TMX_FUZZ
     async_emit(ctx, req);
     return TELEMETRIX_REASON_NONE;
 #else
+    __atomic_fetch_add(&st.pending, 1, __ATOMIC_ACQ_REL);
     if (xTaskCreate(async_task, "test.echo", 4096, (void *)(uintptr_t)req, 5, NULL) != pdPASS) {
+        __atomic_fetch_sub(&st.pending, 1, __ATOMIC_RELEASE);
         return TELEMETRIX_REASON_HARDWARE;
     }
     return TELEMETRIX_REASON_NONE;
+#endif
+}
+
+/** Bounded wait for the sub-2 tasks: after the release hook the ctx may be gone. */
+static void wait_async_tasks(void)
+{
+#ifndef TMX_FUZZ
+    for (int i = 0; i < 1000 && __atomic_load_n(&st.pending, __ATOMIC_ACQUIRE) > 0; i++) {
+        vTaskDelay(pdMS_TO_TICKS(1) ? pdMS_TO_TICKS(1) : 1);
+    }
 #endif
 }
 
@@ -97,6 +116,7 @@ static void busy(void)
 static telemetrix_reason_t command(telemetrix_plugin_ctx_t *ctx, uint8_t sub, const uint8_t *args, size_t len,
                                    uint8_t *code)
 {
+    st.ctx = ctx;
     switch (sub) {
     case 0:
         return telemetrix_plugin_emit(ctx, 0, args, len) == ESP_OK ? TELEMETRIX_REASON_NONE :
@@ -132,6 +152,7 @@ static uint32_t poll(telemetrix_plugin_ctx_t *ctx, uint32_t now_ms)
 
 static void release(telemetrix_plugin_ctx_t *ctx)
 {
+    wait_async_tasks();
     st.ticking = false;
     if (st.led >= 0) {
         telemetrix_plugin_release_pin(ctx, (uint8_t)st.led);
