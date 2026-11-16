@@ -7,6 +7,9 @@
 
 #include "telemetrix.h"
 
+/** I2C buses and 1-wire buses a profile may grant, each kind; the drivers size their tables by it. */
+#define TMX_MAX_BUSES 4
+
 /** The hardware seen by the core and the adapter. src/drivers/esp/ implements it on chips, src/drivers/fake/ in tests.
  *  dht_start and sonar_start only start the measurement; the result arrives through tmx_completion_post with the token:
  *  five DHT frame bytes or an error, the sonar echo in microseconds or ESP_ERR_TIMEOUT.

@@ -124,6 +124,14 @@ void tmx_adapter_retire(tmx_adapter_t *a, uint8_t gpio)
 
 void tmx_adapter_emit(tmx_adapter_t *a, const uint8_t *report, size_t n, bool reply, int8_t kind, uint16_t key)
 {
+    uint8_t wrapped[TMX_REPORT_MAX];
+    if (a->on_bus >= 0) {
+        size_t m = tmx_rpt_bus_wrap(wrapped, (uint8_t)a->on_bus, report, n);
+        if (m > 0) {
+            a->emit(wrapped, m, reply, kind, key, a->ctx);
+        }
+        return;
+    }
     a->emit(report, n, reply, kind, key, a->ctx);
 }
 
@@ -148,6 +156,7 @@ esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, cons
     a->drv = drv;
     a->emit = emit;
     a->ctx = ctx;
+    a->on_bus = -1;
     clear_tables(a);
     return tmx_claims_init(&a->claims, p, drv);
 }
@@ -364,7 +373,7 @@ telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint
     case TMX_CMD_I2C_BEGIN:
     case TMX_CMD_I2C_READ:
     case TMX_CMD_I2C_WRITE:
-        why = tmx_i2c_command(a, id, p, len);
+        why = tmx_i2c_command(a, 0, id, p, len);
         break;
     case TMX_CMD_SONAR_NEW:
         why = tmx_sonar_new(a, p[0], p[1], now_ms);
@@ -374,7 +383,7 @@ telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint
         break;
     default:
         if (id >= TMX_CMD_ONE_WIRE_INIT && id <= TMX_CMD_ONE_WIRE_CRC8) {
-            why = tmx_onewire_command(a, id, p, len);
+            why = tmx_onewire_command(a, 0, id, p, len);
         }
         break;
     }

@@ -6,7 +6,7 @@
 
 static const char *TAG = "telemetrix";
 
-#define OW_BUSES 2
+#define OW_BUSES TMX_MAX_BUSES
 #define OW_MAX_RX_BYTES 10   /* a ROM id plus command margin per read call */
 
 typedef struct {

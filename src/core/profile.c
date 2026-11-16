@@ -47,6 +47,9 @@ static esp_err_t validate_pins(const telemetrix_profile_t *p, bool *any_pwm)
 
 static esp_err_t validate_buses(const telemetrix_profile_t *p)
 {
+    if (p->n_i2c > TMX_MAX_BUSES || p->n_onewire > TMX_MAX_BUSES) {
+        return ESP_ERR_INVALID_ARG;
+    }
     for (size_t i = 0; i < p->n_i2c; i++) {
         const telemetrix_i2c_bus_t *b = &p->i2c[i];
         for (size_t j = 0; j < i; j++) {

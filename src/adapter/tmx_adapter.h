@@ -52,11 +52,11 @@ typedef struct {
 } tmx_pwm_t;
 
 typedef struct {
-    bool open;                  /**< bus 0 opened through the driver */
+    bool open[TMX_MAX_BUSES];   /**< indexed by profile bus index: opened through the driver */
 } tmx_i2c_t;
 
 typedef struct {
-    bool open;                  /**< bus 0 opened; holds one RMT RX claim and the bus pin claim */
+    bool open[TMX_MAX_BUSES];   /**< indexed by profile bus index: opened; holds one RMT RX claim and the bus pin claim */
 } tmx_onewire_t;
 
 /** Sonar and DHT devices are indexed in registration order; a completion token is (generation << 8 | index). */
@@ -95,6 +95,7 @@ struct tmx_adapter {
     uint32_t refused_commands;
     bool reporting;             /**< STOP_ALL_REPORTS clears it, ENABLE_ALL_REPORTS and release set it */
     bool reset_requested;
+    int16_t on_bus;             /**< bus of the ON_BUS command being handled, -1 otherwise: replies are wrapped while set */
     tmx_digital_t digital;
     tmx_analog_t analog;
     tmx_pwm_t pwm;
@@ -177,14 +178,17 @@ telemetrix_reason_t tmx_servo_detach(tmx_adapter_t *a, uint8_t gpio);
 void tmx_pwm_forget(tmx_adapter_t *a, int idx);
 
 /* i2c.c */
-/** I2C_BEGIN, I2C_READ, I2C_WRITE (ids 9-11). A read that no device answered is NO_ANSWER and emits nothing. */
-telemetrix_reason_t tmx_i2c_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len);
-/** Close bus 0 when open; the claims go with tmx_claims_release_all. */
+/** I2C_BEGIN, I2C_READ, I2C_WRITE (ids 9-11) on the profile bus number bus; a bus not in the profile is BUS_UNKNOWN.
+ *  A read that no device answered is NO_ANSWER and emits nothing. Stock dispatch passes bus 0. */
+telemetrix_reason_t tmx_i2c_command(tmx_adapter_t *a, uint8_t bus, uint8_t id, const uint8_t *p, size_t len);
+/** Close every open bus; the claims go with tmx_claims_release_all. */
 void tmx_i2c_release(tmx_adapter_t *a);
 
 /* onewire.c */
-/** ONE_WIRE_INIT .. ONE_WIRE_CRC8 (ids 27-35). */
-telemetrix_reason_t tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len);
+/** ONE_WIRE_INIT .. ONE_WIRE_CRC8 (ids 27-35) on the profile bus number bus; a bus not in the profile is
+ *  BUS_UNKNOWN. Stock dispatch passes bus 0. */
+telemetrix_reason_t tmx_onewire_command(tmx_adapter_t *a, uint8_t bus, uint8_t id, const uint8_t *p, size_t len);
+/** Close every open bus. */
 void tmx_onewire_release(tmx_adapter_t *a);
 
 /* sensors.c */

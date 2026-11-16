@@ -5,7 +5,7 @@
 
 static const char *TAG = "telemetrix";
 
-#define I2C_BUSES 2
+#define I2C_BUSES TMX_MAX_BUSES
 #define I2C_DEVICES 8   /* cached device handles per bus */
 
 typedef struct {
