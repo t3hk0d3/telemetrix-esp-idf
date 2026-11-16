@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .chain import CommandResult
 
 __all__ = [
     "ChainError",
@@ -48,8 +51,10 @@ class ProtocolError(TelemetrixError, ValueError):
 
 
 class ChainError(TelemetrixError):
-    """A chain had a refused command. `results` holds one entry per command, in order (`CommandResult`, chain.py)."""
+    """A chain had a refused or skipped command. `results` holds every command's `CommandResult` (chain.py)."""
 
-    def __init__(self, results: list[Any]) -> None:
-        super().__init__(f"chain refused: {len(results)} commands, see .results")
+    def __init__(self, results: list[CommandResult]) -> None:
+        bad = [r for r in results if r.status != "done"]
+        first = f"; first: {bad[0].op} {bad[0].status} {bad[0].reason!r}" if bad else ""
+        super().__init__(f"chain refused: {len(bad)} of {len(results)} commands not done{first}")
         self.results = results

@@ -273,6 +273,7 @@ async def _handshake(
             plugins_available={},
             stats=stats,
             plugin_halves=plugins,
+            timeout=timeout,
         )
 
     major, minor = fw.ext
@@ -293,6 +294,7 @@ async def _handshake(
         plugins_available=found.plugins,
         stats=stats,
         plugin_halves=plugins,
+        timeout=timeout,
     )
 
 
