@@ -124,8 +124,8 @@ void tmx_adapter_retire(tmx_adapter_t *a, uint8_t gpio)
 
 void tmx_adapter_emit(tmx_adapter_t *a, const uint8_t *report, size_t n, bool reply, int8_t kind, uint16_t key)
 {
-    uint8_t wrapped[TMX_REPORT_MAX];
     if (a->on_bus >= 0) {
+        uint8_t wrapped[TMX_REPORT_MAX + 2];    /* BUS_REPORT: the stock report plus its bus byte and report id */
         size_t m = tmx_rpt_bus_wrap(wrapped, (uint8_t)a->on_bus, report, n);
         if (m > 0) {
             a->emit(wrapped, m, reply, kind, key, a->ctx);
@@ -148,6 +148,9 @@ esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, cons
                            const tmx_drv_t *drv, tmx_emit_fn emit, void *ctx)
 {
     if (!a || !p || !cfg || !drv || !emit) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (p->n_i2c > TMX_MAX_BUSES || p->n_onewire > TMX_MAX_BUSES) {
         return ESP_ERR_INVALID_ARG;
     }
     memset(a, 0, sizeof(*a));

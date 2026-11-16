@@ -52,6 +52,9 @@ static esp_err_t validate_buses(const telemetrix_profile_t *p)
     }
     for (size_t i = 0; i < p->n_i2c; i++) {
         const telemetrix_i2c_bus_t *b = &p->i2c[i];
+        if (b->bus >= TMX_MAX_BUSES) {
+            return ESP_ERR_INVALID_ARG;
+        }
         for (size_t j = 0; j < i; j++) {
             if (p->i2c[j].bus == b->bus) {
                 return ESP_ERR_INVALID_ARG;
@@ -70,6 +73,9 @@ static esp_err_t validate_buses(const telemetrix_profile_t *p)
     }
     for (size_t i = 0; i < p->n_onewire; i++) {
         const telemetrix_onewire_bus_t *b = &p->onewire[i];
+        if (b->bus >= TMX_MAX_BUSES) {
+            return ESP_ERR_INVALID_ARG;
+        }
         for (size_t j = 0; j < i; j++) {
             if (p->onewire[j].bus == b->bus) {
                 return ESP_ERR_INVALID_ARG;

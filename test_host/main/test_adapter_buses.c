@@ -193,7 +193,6 @@ TEST_CASE("On a 1-wire command for a bus not in the profile: BUS_UNKNOWN, no dri
     start_multi(NULL, 0, two_ow, 2);
     TEST_ASSERT_EQUAL(BUS_UNKNOWN, OW(2, TMX_CMD_ONE_WIRE_INIT, 25));
     TEST_ASSERT_EQUAL(BUS_UNKNOWN, OW(2, TMX_CMD_ONE_WIRE_RESET));
-    TEST_ASSERT_EQUAL(BUS_UNKNOWN, OW(9, TMX_CMD_ONE_WIRE_CRC8, 1, 0x01));
     TEST_ASSERT_EQUAL_STRING("", tmx_fake_calls());
 }
 
@@ -244,8 +243,12 @@ static telemetrix_reason_t validate_buses(size_t n_i2c, size_t n_ow)
     static telemetrix_i2c_bus_t i2c[5];
     static telemetrix_onewire_bus_t ow[5];
     for (uint8_t i = 0; i < 5; i++) {
-        i2c[i] = (telemetrix_i2c_bus_t) {.bus = i, .sda = -1, .scl = -1, .speed_hz = 100000};
-        ow[i] = (telemetrix_onewire_bus_t) {.bus = i, .gpio = -1};
+        i2c[i] = (telemetrix_i2c_bus_t) {
+            .bus = i, .sda = -1, .scl = -1, .speed_hz = 100000
+        };
+        ow[i] = (telemetrix_onewire_bus_t) {
+            .bus = i, .gpio = -1
+        };
     }
     telemetrix_profile_t p = {
         .pins = multi_pins, .n_pins = MULTI_PINS, .i2c = i2c, .n_i2c = n_i2c, .onewire = ow, .n_onewire = n_ow,
@@ -266,4 +269,67 @@ TEST_CASE("On more than 4 I2C buses: ESP_ERR_INVALID_ARG", "[adapter]")
 TEST_CASE("On more than 4 1-wire buses: ESP_ERR_INVALID_ARG", "[adapter]")
 {
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, validate_buses(0, 5));
+}
+
+TEST_CASE("On ONE_WIRE_CRC8 in a profile with no 1-wire bus: the stock reply [3,14,35,crc], no driver call", "[adapter]")
+{
+    start_multi(NULL, 0, NULL, 0);
+    TEST_ASSERT_EQUAL(R_NONE, OW(0, TMX_CMD_ONE_WIRE_CRC8, 1, 0x00));
+    TEST_ASSERT_EQUAL(1, fx_n_reports);
+    TEST_ASSERT_EQUAL(4, fx_reports[0].n);
+    TEST_ASSERT_EQUAL(3, fx_reports[0].data[0]);
+    TEST_ASSERT_EQUAL(14, fx_reports[0].data[1]);
+    TEST_ASSERT_EQUAL(35, fx_reports[0].data[2]);
+    TEST_ASSERT_EQUAL_STRING("", tmx_fake_calls());
+}
+
+TEST_CASE("On a bus number of 4 or more in either kind: ESP_ERR_INVALID_ARG", "[adapter]")
+{
+    telemetrix_i2c_bus_t i2c[] = {{.bus = TMX_MAX_BUSES, .sda = -1, .scl = -1}};
+    telemetrix_onewire_bus_t ow[] = {{.bus = TMX_MAX_BUSES, .gpio = -1}};
+    telemetrix_profile_t p = {.pins = multi_pins, .n_pins = MULTI_PINS, .i2c = i2c, .n_i2c = 1};
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+    p.i2c = NULL;
+    p.n_i2c = 0;
+    p.onewire = ow;
+    p.n_onewire = 1;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
+    ow[0].bus = TMX_MAX_BUSES - 1;
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate(&p));
+}
+
+TEST_CASE("On adapter init with more than 4 buses of a kind: ESP_ERR_INVALID_ARG", "[adapter]")
+{
+    static telemetrix_i2c_bus_t i2c[5];
+    static telemetrix_onewire_bus_t ow[5];
+    telemetrix_profile_t p = {.pins = multi_pins, .n_pins = MULTI_PINS, .i2c = i2c, .onewire = ow};
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    tmx_adapter_t a;
+    p.n_i2c = 5;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_adapter_init(&a, &p, &cfg, &tmx_drv_fake, fx_emit, NULL));
+    p.n_i2c = 0;
+    p.n_onewire = 5;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_adapter_init(&a, &p, &cfg, &tmx_drv_fake, fx_emit, NULL));
+}
+
+TEST_CASE("On a 59-byte I2C read with on_bus set: the 66-byte BUS_REPORT arrives whole", "[adapter]")
+{
+    start_multi(two_i2c, 2, NULL, 0);
+    TEST_ASSERT_EQUAL(R_NONE, I2C(1, TMX_CMD_I2C_BEGIN, 19, 20));
+    uint8_t regs[59];
+    for (size_t i = 0; i < sizeof(regs); i++) {
+        regs[i] = (uint8_t)(i + 1);
+    }
+    tmx_fake_i2c_device(1, 0x40, regs, sizeof(regs));
+    fx_a.on_bus = 1;
+    TEST_ASSERT_EQUAL(R_NONE, I2C(1, TMX_CMD_I2C_READ, 0x40, 0, 59, 1));
+    uint8_t stock[TMX_REPORT_MAX];
+    uint8_t want[TMX_REPORT_MAX + 2];
+    size_t n = tmx_rpt_i2c_read(stock, 0x40, 0, regs, 59);
+    TEST_ASSERT_EQUAL(TMX_REPORT_MAX, n);
+    size_t m = tmx_rpt_bus_wrap(want, 1, stock, n);
+    TEST_ASSERT_EQUAL(TMX_REPORT_MAX + 2, m);
+    TEST_ASSERT_EQUAL(1, fx_n_reports);
+    fx_assert_report(0, want, m);
 }

@@ -81,17 +81,17 @@ telemetrix_reason_t tmx_onewire_command(tmx_adapter_t *a, uint8_t bus, uint8_t i
 {
     (void)len;
     const tmx_drv_t *d = a->drv;
+    if (id == TMX_CMD_ONE_WIRE_CRC8) {     /* [n, bytes...]: pure computation, no bus needed; the stock extra byte is ignored */
+        uint8_t crc = crc8(p + 1, p[0]);
+        reply(a, id, &crc, 1);
+        return TELEMETRIX_REASON_NONE;
+    }
     int idx = bus_index(a, bus);
     if (idx < 0) {
         return TELEMETRIX_REASON_BUS_UNKNOWN;
     }
     if (id == TMX_CMD_ONE_WIRE_INIT) {
         return init(a, idx, p);
-    }
-    if (id == TMX_CMD_ONE_WIRE_CRC8) {     /* [n, bytes...]: the stock client's extra byte is ignored */
-        uint8_t crc = crc8(p + 1, p[0]);
-        reply(a, id, &crc, 1);
-        return TELEMETRIX_REASON_NONE;
     }
     if (!a->onewire.open[idx]) {
         return TELEMETRIX_REASON_BAD_ARGUMENT;
