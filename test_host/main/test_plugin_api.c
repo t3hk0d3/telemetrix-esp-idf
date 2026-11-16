@@ -18,6 +18,7 @@
 typedef struct {
     char id;
     telemetrix_reason_t answer;
+    uint8_t code;                       /* written to *code on every call */
     uint8_t sub;
     uint8_t args[8];
     size_t len;
@@ -38,8 +39,8 @@ static const char *const rec_caps[] = {"rec.x"};
 static telemetrix_reason_t rec_command(telemetrix_plugin_ctx_t *ctx, uint8_t sub, const uint8_t *args, size_t len,
                                        uint8_t *code)
 {
-    (void)code;
     rec_t *r = telemetrix_plugin_user(ctx);
+    *code = r->code;
     r->sub = sub;
     r->len = len < sizeof(r->args) ? len : sizeof(r->args);
     memcpy(r->args, args, r->len);
@@ -289,6 +290,42 @@ TEST_CASE("PLUGIN with a handler returning another reason: ERROR with [slot, sub
     const uint8_t want[] = {ERR_PLUGIN(0, TELEMETRIX_REASON_HARDWARE, 1, 3)};
     start_ext();
     rec1.answer = TELEMETRIX_REASON_HARDWARE;
+    PLUGIN(1, 3);
+    TEST_ASSERT_EQUAL(1, n_reports);
+    assert_report(0, want, sizeof(want));
+}
+
+TEST_CASE("PLUGIN with a handler returning SKIPPED: ERROR PLUGIN with code 0", "[plugin_api]")
+{
+    const uint8_t want[] = {8, TMX_RPT_ERROR, 0, 0, TMX_CMD_PLUGIN, TELEMETRIX_REASON_PLUGIN, 1, 3, 0};
+    start_ext();
+    rec1.answer = TELEMETRIX_REASON_SKIPPED;
+    rec1.code = 0x55;
+    PLUGIN(1, 3);
+    TEST_ASSERT_EQUAL(1, n_reports);
+    assert_report(0, want, sizeof(want));
+}
+
+TEST_CASE("PLUGIN with a handler returning SKIPPED: counted as a refusal, later commands skipped", "[plugin_api]")
+{
+    const uint8_t want[] = {ERR_PLUGIN(1, TELEMETRIX_REASON_SKIPPED, 1, 3)};
+    start_ext();
+    rec1.answer = TELEMETRIX_REASON_SKIPPED;
+    PLUGIN(1, 3);
+    rec1.answer = TELEMETRIX_REASON_NONE;
+    PLUGIN(1, 3);
+    TEST_ASSERT_EQUAL(1, a.refused_commands);
+    TEST_ASSERT_EQUAL(1, rec1.commands);
+    TEST_ASSERT_EQUAL(2, n_reports);
+    assert_report(1, want, sizeof(want));
+}
+
+TEST_CASE("PLUGIN with a handler returning a value outside the reasons: ERROR PLUGIN with code 0", "[plugin_api]")
+{
+    const uint8_t want[] = {8, TMX_RPT_ERROR, 0, 0, TMX_CMD_PLUGIN, TELEMETRIX_REASON_PLUGIN, 1, 3, 0};
+    start_ext();
+    rec1.answer = (telemetrix_reason_t)200;
+    rec1.code = 0x55;
     PLUGIN(1, 3);
     TEST_ASSERT_EQUAL(1, n_reports);
     assert_report(0, want, sizeof(want));
@@ -677,6 +714,44 @@ TEST_CASE("telemetrix_plugin_wake: the network task woken", "[plugin_api]")
     start_ext();
     telemetrix_plugin_wake(ctx(1));
     TEST_ASSERT_EQUAL(1, wakes);
+}
+
+static volatile bool hook_in;
+
+/** Runs under the ring lock: holds it for 30 ms, three times the bounded lock wait. */
+static void slow_put_hook(void)
+{
+    hook_in = true;
+    vTaskDelay(pdMS_TO_TICKS(30) ? pdMS_TO_TICKS(30) : 1);
+}
+
+static volatile bool put_done;
+
+static void put_task(void *arg)
+{
+    (void)arg;
+    tmx_emit_ring_put(1, 0, NULL, 0);
+    put_done = true;
+    vTaskDelete(NULL);
+}
+
+TEST_CASE("telemetrix_plugin_wake while the ring lock is held for 30 ms: the wake is not lost", "[plugin_api]")
+{
+    start_ext();
+    hook_in = put_done = false;
+    tmx_emit_ring_set_put_hook(slow_put_hook);
+    TEST_ASSERT_EQUAL(pdPASS, xTaskCreate(put_task, "slow.put", 4096, NULL, 5, NULL));
+    for (int i = 0; i < 300 && !hook_in; i++) {
+        vTaskDelay(1);
+    }
+    TEST_ASSERT_TRUE(hook_in);
+    telemetrix_plugin_wake(ctx(1));
+    TEST_ASSERT_TRUE(ctx(1)->wake);
+    for (int i = 0; i < 300 && !put_done; i++) {
+        vTaskDelay(1);
+    }
+    TEST_ASSERT_TRUE(put_done);
+    tmx_emit_ring_set_put_hook(NULL);
 }
 
 TEST_CASE("poll hook in stock mode: not called", "[plugin_api]")

@@ -130,3 +130,12 @@ TEST_CASE("telemetrix_config_default: plugin budget 5000 us and no plugins", "[c
     TEST_ASSERT_NULL(c.plugins);
     TEST_ASSERT_EQUAL(0, c.n_plugins);
 }
+
+TEST_CASE("telemetrix_config_default: network task stack 6144 bytes, at least the minimum", "[cfg]")
+{
+    telemetrix_config_t c;
+    memset(&c, 0xa5, sizeof(c));
+    telemetrix_config_default(&c);
+    TEST_ASSERT_EQUAL_UINT32(6144, c.task_stack_bytes);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(TELEMETRIX_TASK_STACK_MIN, c.task_stack_bytes);
+}

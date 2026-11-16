@@ -24,6 +24,7 @@ void telemetrix_config_default(telemetrix_config_t *out)
         .n_allowed = 0,
         .task_priority = 5,
         .task_core = -1,
+        .task_stack_bytes = 6144,
         .extended = true,
         .plugin_budget_us = 5000,
         .plugins = NULL,

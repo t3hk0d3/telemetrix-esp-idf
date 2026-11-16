@@ -166,6 +166,49 @@ TEST_CASE("telemetrix_start on an invalid profile: ESP_ERR_INVALID_ARG and nothi
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, telemetrix_stop());
 }
 
+TEST_CASE("telemetrix_start with a task stack under 4096 bytes: ESP_ERR_INVALID_ARG and nothing started", "[server]")
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.task_stack_bytes = TELEMETRIX_TASK_STACK_MIN - 1;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, telemetrix_start(&profile, &cfg, NULL));
+    telemetrix_status_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
+    TEST_ASSERT_FALSE(st.running);
+}
+
+TEST_CASE("telemetrix_start with a zeroed config: ESP_ERR_INVALID_ARG (task stack 0)", "[server]")
+{
+    telemetrix_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.server_enabled = true;
+    cfg.port = pick_port();
+    cfg.send_queue_bytes = 4096;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, telemetrix_start(&profile, &cfg, NULL));
+}
+
+TEST_CASE("telemetrix_start with the minimum task stack: runs a session", "[server]")
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.task_stack_bytes = TELEMETRIX_TASK_STACK_MIN;
+    start_server(&cfg);
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    const uint8_t loop[] = {2, 0, 0x5a};
+    TEST_ASSERT_EQUAL(3, send(c, loop, sizeof(loop), 0));
+    uint8_t reply[3];
+    TEST_ASSERT_EQUAL(0, read_n(c, reply, sizeof(reply)));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(loop, reply, 3);
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
 TEST_CASE("server session: start, a loop round trip, a second connection, kick, stop", "[server]")
 {
     telemetrix_config_t cfg;

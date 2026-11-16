@@ -10,7 +10,10 @@ extern "C" {
 /** Extension plugins: trusted application code a client reaches in extended mode through PLUGIN [slot, sub, args...];
  *  a plugin answers with PLUGIN_REPORT [slot, sub, data...]. A plugin's slot is its index in cfg.plugins.
  *
- *  Every call into a plugin (command, poll, release) runs on the network task. Command and poll calls are timed against
+ *  Every call into a plugin (command, poll, release) runs on the network task, on its stack of cfg.task_stack_bytes
+ *  (default 6144, at least TELEMETRIX_TASK_STACK_MIN). Budget for it: ESP_LOGx alone can take 1.5-2.5 KB of stack on
+ *  Xtensa, and the free stack left at the plugin call is unmeasured (to be measured in the board pass); raise
+ *  cfg.task_stack_bytes for plugins with deep calls or large locals. Command and poll calls are timed against
  *  cfg.plugin_budget_us; an overrun is counted in the status, never aborted. A plugin gets only what the board profile
  *  grants: pins whose profile entry names one of its named capabilities, and RMT channels of the grant. */
 
@@ -23,8 +26,10 @@ typedef struct telemetrix_plugin {
     /** Named capabilities the plugin declares (at most 16 distinct names per server, each at most 24 bytes). */
     const char *const *named_caps;
     size_t n_named_caps;
-    /** A PLUGIN command; NONE completes it. *code is written when it returns TELEMETRIX_REASON_PLUGIN. NULL = the
-     *  plugin takes no commands (NOT_IN_SCOPE). */
+    /** A PLUGIN command; NONE completes it. *code is written when it returns TELEMETRIX_REASON_PLUGIN. Any other
+     *  telemetrix_reason_t from NO_SUCH_PIN to NO_SUCH_SLOT refuses with that reason, except SKIPPED (the server's
+     *  own): SKIPPED or a value outside the reasons is sent as PLUGIN with code 0. NULL = the plugin takes no commands
+     *  (NOT_IN_SCOPE). */
     telemetrix_reason_t (*command)(telemetrix_plugin_ctx_t *ctx, uint8_t sub, const uint8_t *args, size_t len,
                                    uint8_t *code);
     /** Called during an extended session only: first at once, then when the time it returned (ms) is up or after
@@ -61,7 +66,8 @@ esp_err_t telemetrix_plugin_emit(telemetrix_plugin_ctx_t *ctx, uint8_t sub, cons
  *  telemetrix_plugin_emit. Reports queued in a session that has ended are dropped. The ctx is valid only until the
  *  plugin's release hook at stop returns; a late call fails with ESP_ERR_INVALID_STATE without touching it. */
 esp_err_t telemetrix_plugin_emit_async(telemetrix_plugin_ctx_t *ctx, uint8_t sub, const uint8_t *data, size_t n);
-/** Ask for a poll call soon; any task (not an ISR). Does nothing once the server has stopped (same ctx rule as
+/** Ask for a poll call soon; any task (not an ISR). Never dropped: it waits for the ring lock as long as it is held
+ *  (a holder copies at most 251 bytes under it). Does nothing once the server has stopped (same ctx rule as
  *  telemetrix_plugin_emit_async). */
 void telemetrix_plugin_wake(telemetrix_plugin_ctx_t *ctx);
 /** Status text shown in telemetrix_get_status: at most 47 characters are copied; NULL clears it. Network task only. */

@@ -32,6 +32,11 @@ static void lock_give(void)
 static void lock_create(void)
 {
 }
+
+static bool lock_ready(void)
+{
+    return true;
+}
 #else
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -55,6 +60,11 @@ static void lock_create(void)
     if (!lock) {
         lock = xSemaphoreCreateMutexStatic(&lock_storage);
     }
+}
+
+static bool lock_ready(void)
+{
+    return lock != NULL;
 }
 #endif
 
@@ -233,8 +243,12 @@ esp_err_t telemetrix_plugin_emit_async(telemetrix_plugin_ctx_t *ctx, uint8_t sub
 
 void telemetrix_plugin_wake(telemetrix_plugin_ctx_t *ctx)
 {
-    if (!ctx || !lock_take()) {
+    /* never dropped: the holders keep the lock for a copy of at most 251 bytes and the mutex lends them the waiter's
+     * priority, so retrying the bounded take ends (as tmx_emit_ring_register does). No lock yet = no server ever ran. */
+    if (!ctx || !lock_ready()) {
         return;
+    }
+    while (!lock_take()) {
     }
     bool ok = registered(ctx);
     if (ok) {

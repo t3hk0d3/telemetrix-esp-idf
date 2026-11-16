@@ -93,6 +93,15 @@ static void timer_stop(const tmx_adapter_t *a, telemetrix_plugin_ctx_t *ctx, uin
     tmx_plugins_account(ctx, a->drv->micros() - t0, a->cfg.plugin_budget_us);
 }
 
+/** A reason a plugin may return as is: NONE or a refusal reason other than SKIPPED (the server's own word). Anything
+ *  else becomes PLUGIN with code 0. */
+static bool plugin_reason_ok(telemetrix_reason_t why)
+{
+    int v = (int)why;
+    return v == TELEMETRIX_REASON_NONE ||
+           (v >= TELEMETRIX_REASON_NO_SUCH_PIN && v <= TELEMETRIX_REASON_NO_SUCH_SLOT && v != TELEMETRIX_REASON_SKIPPED);
+}
+
 telemetrix_reason_t tmx_adapter_plugin_command(tmx_adapter_t *a, const uint8_t *payload, size_t len, uint8_t *code)
 {
     if (len < 2) {
@@ -108,6 +117,10 @@ telemetrix_reason_t tmx_adapter_plugin_command(tmx_adapter_t *a, const uint8_t *
         uint64_t t0 = timer_start(a);
         why = ctx->plugin->command(ctx, payload[1], payload + 2, len - 2, code);
         timer_stop(a, ctx, t0);
+        if (!plugin_reason_ok(why)) {
+            why = TELEMETRIX_REASON_PLUGIN;
+            *code = 0;
+        }
     }
     if (why != TELEMETRIX_REASON_NONE) {
         ctx->refusals++;

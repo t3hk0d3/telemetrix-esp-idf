@@ -124,6 +124,9 @@ typedef struct {
     size_t n_allowed;
     uint8_t task_priority;
     int8_t task_core;             /**< -1 = no affinity */
+    /** Stack of the network task, in bytes (default 6144, at least TELEMETRIX_TASK_STACK_MIN, else telemetrix_start
+     *  returns ESP_ERR_INVALID_ARG). Plugin command, poll and release hooks run on this stack (telemetrix_plugin.h). */
+    uint32_t task_stack_bytes;
     bool extended;                /**< offer the extended protocol to a client that asks for it (needs CONFIG_TELEMETRIX_EXTENDED) */
     uint32_t plugin_budget_us;    /**< a plugin command or poll call longer than this counts as an overrun */
     /** Extension plugins (telemetrix_plugin.h) in slot order, at most TELEMETRIX_PLUGINS_MAX; the plugins must outlive
@@ -132,6 +135,11 @@ typedef struct {
     size_t n_plugins;
 } telemetrix_config_t;
 
+/** The smallest cfg.task_stack_bytes telemetrix_start accepts. */
+#define TELEMETRIX_TASK_STACK_MIN 4096
+
+/** Fill *out with every default. Start every configuration from it and change what you need: a configuration built
+ *  from zeroes gets extended = false, plugin_budget_us = 0 and task_stack_bytes = 0, which telemetrix_start refuses. */
 void telemetrix_config_default(telemetrix_config_t *out);
 
 /** Why a command was refused; NONE = done. The values are wire values of the extended protocol. */

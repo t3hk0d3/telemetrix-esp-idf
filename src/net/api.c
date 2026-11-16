@@ -19,7 +19,6 @@ static portMUX_TYPE crit = portMUX_INITIALIZER_UNLOCKED;
 #define CRIT_EXIT() portEXIT_CRITICAL_SAFE(&crit)
 #endif
 
-#define TASK_STACK_BYTES 6144
 #define STOP_WAIT_MS 2000
 #define STOP_POLL_MS 10
 #define LOCK_WAIT_MS 1000
@@ -83,7 +82,7 @@ esp_err_t telemetrix_start(const telemetrix_profile_t *profile, const telemetrix
         tmx_server_publish(s);
         const telemetrix_config_t *c = config ? config : &defaults;
         BaseType_t core = c->task_core < 0 ? tskNO_AFFINITY : c->task_core;
-        if (xTaskCreatePinnedToCore(tmx_server_task, "telemetrix", TASK_STACK_BYTES, s, c->task_priority, NULL,
+        if (xTaskCreatePinnedToCore(tmx_server_task, "telemetrix", c->task_stack_bytes, s, c->task_priority, NULL,
                                     core) != pdPASS) {
             tmx_server_free(s);
             s = NULL;

@@ -78,6 +78,7 @@ static void emit(const uint8_t *report, size_t n, bool reply, int8_t kind, uint1
 static esp_err_t check_config(const telemetrix_config_t *c)
 {
     if (c->send_queue_bytes < TMX_REPORT_MAX || c->task_priority >= configMAX_PRIORITIES ||
+            c->task_stack_bytes < TELEMETRIX_TASK_STACK_MIN ||
             c->task_core >= (int)configNUMBER_OF_CORES || (c->n_allowed > 0 && !c->allowed) ||
             (c->n_plugins > 0 && !c->plugins)) {
         return ESP_ERR_INVALID_ARG;
