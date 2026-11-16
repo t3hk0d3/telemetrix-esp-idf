@@ -116,12 +116,35 @@ typedef struct {
 void tmx_frame_init(tmx_frame_t *f, uint16_t payload_cap);
 /** Feed received bytes; fn is called once per complete packet with the payload inside f's buffer. */
 void tmx_frame_feed(tmx_frame_t *f, const uint8_t *data, size_t n, uint32_t now_ms, tmx_packet_fn fn, void *ctx);
-/** Drop a packet (or skip) that has been unfinished for more than 2000 ms; counts a dropped packet. */
+/** Drop a packet that has been unfinished for more than 2000 ms and count it; an expired skip only stops discarding
+ *  (the oversized packet was counted when it began). */
 void tmx_frame_tick(tmx_frame_t *f, uint32_t now_ms);
 
 typedef enum { TMX_STOCK_OK, TMX_STOCK_SHORT, TMX_STOCK_IGNORED } tmx_stock_verdict_t;
 
 /** Check a stock packet's payload length. Does not validate pins or values; trailing bytes are tolerated. */
 tmx_stock_verdict_t tmx_stock_check(uint8_t id, const uint8_t *payload, size_t len);
+
+/* Reports sent to the client. Each encoder writes [len][id][payload] into out and returns the bytes written; out must
+ * hold TMX_REPORT_MAX bytes. */
+#define TMX_REPORT_MAX 64
+
+size_t tmx_rpt_loop(uint8_t *out, uint8_t c);
+size_t tmx_rpt_digital(uint8_t *out, uint8_t pin, uint8_t v);
+size_t tmx_rpt_analog(uint8_t *out, uint8_t pin, uint16_t value);
+size_t tmx_rpt_firmware(uint8_t *out);
+/** [2,6,pin]; upstream omits the length byte, this server sends it (README deviation). */
+size_t tmx_rpt_servo_unavailable(uint8_t *out, uint8_t pin);
+/** n is clamped to 59 so the report fits TMX_REPORT_MAX. */
+size_t tmx_rpt_i2c_read(uint8_t *out, uint8_t addr, uint8_t reg, const uint8_t *data, size_t n);
+/** [3,8,1,addr]: a NACK or a short read. */
+size_t tmx_rpt_i2c_short(uint8_t *out, uint8_t addr);
+size_t tmx_rpt_sonar(uint8_t *out, uint8_t trig, uint16_t cm);
+/** hum and temp are encoded as little-endian IEEE-754 floats regardless of host byte order. */
+size_t tmx_rpt_dht_data(uint8_t *out, uint8_t pin, float hum, float temp);
+/** err: 1 checksum, 2 timeout. */
+size_t tmx_rpt_dht_error(uint8_t *out, uint8_t pin, uint8_t err);
+/** [1+1+n,14,subtype,data...]; subtype is a TMX_CMD_ONE_WIRE_* id; n is 1 (reset, read, crc8) or 8 (search). */
+size_t tmx_rpt_onewire(uint8_t *out, uint8_t subtype, const uint8_t *data, size_t n);
 
 #endif

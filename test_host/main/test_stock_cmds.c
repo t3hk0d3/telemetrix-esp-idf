@@ -68,7 +68,8 @@ TEST_CASE("On an empty payload for a command that needs one: returns TMX_STOCK_S
     static const uint8_t ids[] = {TMX_CMD_LOOP_COMMAND, TMX_CMD_SET_PIN_MODE, TMX_CMD_ANALOG_WRITE,
                                   TMX_CMD_SERVO_ATTACH, TMX_CMD_I2C_READ, TMX_CMD_I2C_WRITE, TMX_CMD_SONAR_NEW,
                                   TMX_CMD_DHT_NEW, TMX_CMD_ONE_WIRE_INIT, TMX_CMD_ONE_WIRE_SELECT,
-                                  TMX_CMD_ONE_WIRE_CRC8};
+                                  TMX_CMD_ONE_WIRE_CRC8
+                                 };
     for (size_t i = 0; i < sizeof(ids); i++) {
         TEST_ASSERT_EQUAL(TMX_STOCK_SHORT, tmx_stock_check(ids[i], zeros, 0));
     }
