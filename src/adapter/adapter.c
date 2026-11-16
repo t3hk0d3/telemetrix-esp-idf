@@ -93,7 +93,9 @@ esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, cons
 
 void tmx_adapter_release(tmx_adapter_t *a)
 {
-    /* Task 7 closes its buses and drops sonar and DHT devices here, before the claims go. */
+    tmx_i2c_release(a);         /* buses closed and devices dropped before their pins and RMT claims go */
+    tmx_onewire_release(a);
+    tmx_sensors_release(a);
     tmx_claims_release_all(&a->claims);
     clear_tables(a);
 }
@@ -156,10 +158,12 @@ uint32_t tmx_adapter_poll(tmx_adapter_t *a, uint32_t now_ms)
         tmx_analog_scan(a);
         tmx_deadline_arm(&a->analog.scan, now_ms, a->analog.interval_ms);
     }
-    /* Task 7: drain tmx_completion_take here (sonar echoes, DHT frames) and run the sonar and DHT deadlines. */
+    tmx_sensors_poll(a, now_ms);
     uint32_t next = tmx_deadline_left(&a->digital.scan, now_ms);
     uint32_t analog = tmx_deadline_left(&a->analog.scan, now_ms);
-    return analog < next ? analog : next;
+    uint32_t sensors = tmx_sensors_left(a, now_ms);
+    next = analog < next ? analog : next;
+    return sensors < next ? sensors : next;
 }
 
 static bool known_mode(uint8_t mode)
@@ -291,8 +295,21 @@ void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, si
         tmx_adapter_release(a);
         a->reset_requested = true;
         break;
+    case TMX_CMD_I2C_BEGIN:
+    case TMX_CMD_I2C_READ:
+    case TMX_CMD_I2C_WRITE:
+        ok = tmx_i2c_command(a, id, p, len);
+        break;
+    case TMX_CMD_SONAR_NEW:
+        ok = tmx_sonar_new(a, p[0], p[1], now_ms);
+        break;
+    case TMX_CMD_DHT_NEW:
+        ok = tmx_dht_new(a, p[0], now_ms);
+        break;
     default:
-        /* Task 7: I2C, sonar, DHT and 1-wire commands. */
+        if (id >= TMX_CMD_ONE_WIRE_INIT && id <= TMX_CMD_ONE_WIRE_CRC8) {
+            ok = tmx_onewire_command(a, id, p, len);
+        }
         break;
     }
     if (!ok) {

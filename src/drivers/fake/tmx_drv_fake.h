@@ -15,10 +15,13 @@ void tmx_fake_loopback(uint8_t out_gpio, uint8_t in_gpio);
 void tmx_fake_set_adc(uint8_t unit, uint8_t channel, int raw);
 /** An I2C device at addr on bus whose register map is regs[0..n) (at most 256 bytes). */
 void tmx_fake_i2c_device(uint8_t bus, uint8_t addr, const uint8_t *regs, size_t n);
-/** What dht_start on gpio will deliver (completion posting arrives with the completion queue). */
+/** What dht_start on gpio will deliver: the five frame bytes with err ESP_OK, or err (e.g. ESP_ERR_TIMEOUT). */
 void tmx_fake_dht_frame(uint8_t gpio, const uint8_t f[5], esp_err_t err);
-/** What sonar_start on trig will deliver, in microseconds. */
+/** What sonar_start on trig will deliver, in microseconds; 0 (the default) delivers ESP_ERR_TIMEOUT. */
 void tmx_fake_sonar_echo(uint8_t trig, uint32_t us);
+/** dht_start and sonar_start only remember the call and its token. This posts every pending start, in start order,
+ *  through tmx_completion_post with the scripted result and forgets them. Without it nothing ever completes. */
+void tmx_fake_complete_pending(void);
 /** The ROMs the 1-wire search on bus finds. */
 void tmx_fake_ow_devices(uint8_t bus, const uint8_t (*roms)[8], size_t n);
 

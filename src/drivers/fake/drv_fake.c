@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "tmx_core.h"
 #include "tmx_drv_fake.h"
 
 #define FAKE_PINS 256
@@ -10,6 +11,7 @@
 #define FAKE_OW_ROMS 8
 #define FAKE_LOG_SIZE 16384
 #define FAKE_FAILS 16
+#define FAKE_PENDING 16
 
 typedef enum { MODE_NONE, MODE_INPUT, MODE_OUTPUT } pin_mode_t;
 
@@ -37,6 +39,12 @@ typedef struct {
     char log[FAKE_LOG_SIZE];
     size_t log_len;
     bool log_truncated;
+    struct {
+        bool dht;           /**< true: a DHT read on gpio, false: a sonar ping with trigger gpio */
+        uint8_t gpio;
+        uint32_t token;
+    } pending[FAKE_PENDING];
+    size_t n_pending;
     struct {
         char op[24];
         esp_err_t err;
@@ -120,6 +128,26 @@ void tmx_fake_dht_frame(uint8_t gpio, const uint8_t f[5], esp_err_t err)
 void tmx_fake_sonar_echo(uint8_t trig, uint32_t us)
 {
     fake.sonar_us[trig] = us;
+}
+
+void tmx_fake_complete_pending(void)
+{
+    size_t n = fake.n_pending;
+    fake.n_pending = 0;
+    for (size_t i = 0; i < n; i++) {
+        tmx_completion_t c = {.token = fake.pending[i].token};
+        uint8_t gpio = fake.pending[i].gpio;
+        if (fake.pending[i].dht) {
+            c.kind = TMX_COMPLETION_DHT;
+            c.err = fake.dht_err[gpio];
+            memcpy(c.data, fake.dht_frame[gpio], sizeof(c.data));
+        } else {
+            c.kind = TMX_COMPLETION_SONAR;
+            c.value = fake.sonar_us[gpio];
+            c.err = c.value == 0 ? ESP_ERR_TIMEOUT : ESP_OK;
+        }
+        tmx_completion_post(&c);
+    }
 }
 
 void tmx_fake_ow_devices(uint8_t bus, const uint8_t (*roms)[8], size_t n)
@@ -308,8 +336,7 @@ static i2c_device_t *find_device(uint8_t bus, uint8_t addr)
 static esp_err_t f_i2c_read(uint8_t bus, uint8_t addr, uint8_t reg, bool stop, uint8_t *data, size_t n,
                             uint16_t timeout_ms)
 {
-    (void)timeout_ms;
-    record("i2c_read(%u,%u,%u,%d,%u)", bus, addr, reg, stop, (unsigned)n);
+    record("i2c_read(%u,%u,%u,%d,%u,%u)", bus, addr, reg, stop, (unsigned)n, timeout_ms);
     esp_err_t inj = injected("i2c_read");
     if (inj != ESP_OK) {
         return inj;
@@ -328,8 +355,7 @@ static esp_err_t f_i2c_read(uint8_t bus, uint8_t addr, uint8_t reg, bool stop, u
 static esp_err_t f_i2c_write(uint8_t bus, uint8_t addr, const uint8_t *data, size_t n, uint16_t timeout_ms)
 {
     (void)data;
-    (void)timeout_ms;
-    record("i2c_write(%u,%u,%u)", bus, addr, (unsigned)n);
+    record("i2c_write(%u,%u,%u,%u)", bus, addr, (unsigned)n, timeout_ms);
     esp_err_t inj = injected("i2c_write");
     if (inj != ESP_OK) {
         return inj;
@@ -392,6 +418,18 @@ static void f_ow_close(uint8_t bus)
     record("ow_close(%u)", bus);
 }
 
+static esp_err_t add_pending(bool dht, uint8_t gpio, uint32_t token)
+{
+    if (fake.n_pending >= FAKE_PENDING) {
+        return ESP_ERR_NO_MEM;
+    }
+    fake.pending[fake.n_pending].dht = dht;
+    fake.pending[fake.n_pending].gpio = gpio;
+    fake.pending[fake.n_pending].token = token;
+    fake.n_pending++;
+    return ESP_OK;
+}
+
 static esp_err_t f_dht_start(uint8_t gpio, uint32_t token)
 {
     record("dht_start(%u,%u)", gpio, (unsigned)token);
@@ -399,17 +437,18 @@ static esp_err_t f_dht_start(uint8_t gpio, uint32_t token)
     if (inj != ESP_OK) {
         return inj;
     }
-    return ESP_OK;
+    return add_pending(true, gpio, token);
 }
 
 static esp_err_t f_sonar_start(uint8_t trig, uint8_t echo, uint32_t token)
 {
     record("sonar_start(%u,%u,%u)", trig, echo, (unsigned)token);
+    (void)echo;
     esp_err_t inj = injected("sonar_start");
     if (inj != ESP_OK) {
         return inj;
     }
-    return ESP_OK;
+    return add_pending(false, trig, token);
 }
 
 static esp_err_t f_init(const telemetrix_profile_t *p)

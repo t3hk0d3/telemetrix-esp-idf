@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "fake/tmx_drv_fake.h"
+#include "tmx_core.h"
 #include "unity.h"
 
 static const tmx_drv_t *d = &tmx_drv_fake;
@@ -127,4 +128,103 @@ TEST_CASE("On a full log: the truncation is visible and the log is not corrupted
     TEST_ASSERT_TRUE(n > 0 && tmx_fake_calls()[n - 1] == '\n');
     tmx_fake_reset();
     TEST_ASSERT_FALSE(tmx_fake_log_truncated());
+}
+
+TEST_CASE("On dht_start and sonar_start without complete_pending: nothing is posted", "[fake]")
+{
+    tmx_completion_t c;
+    tmx_fake_reset();
+    tmx_completion_reset();
+    TEST_ASSERT_EQUAL(ESP_OK, d->dht_start(4, 7));
+    TEST_ASSERT_EQUAL(ESP_OK, d->sonar_start(5, 6, 8));
+    TEST_ASSERT_FALSE(tmx_completion_take(&c));
+}
+
+TEST_CASE("On complete_pending after a dht_start: the scripted frame is posted with the token", "[fake]")
+{
+    tmx_completion_t c;
+    const uint8_t frame[5] = {1, 2, 3, 4, 10};
+    tmx_fake_reset();
+    tmx_completion_reset();
+    tmx_fake_dht_frame(4, frame, ESP_OK);
+    d->dht_start(4, 0x1234);
+    tmx_fake_complete_pending();
+    TEST_ASSERT_TRUE(tmx_completion_take(&c));
+    TEST_ASSERT_EQUAL(TMX_COMPLETION_DHT, c.kind);
+    TEST_ASSERT_EQUAL_UINT32(0x1234, c.token);
+    TEST_ASSERT_EQUAL(ESP_OK, c.err);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(frame, c.data, 5);
+    TEST_ASSERT_FALSE(tmx_completion_take(&c));
+}
+
+TEST_CASE("On a scripted DHT error: complete_pending posts that error", "[fake]")
+{
+    tmx_completion_t c;
+    const uint8_t frame[5] = {0};
+    tmx_fake_reset();
+    tmx_completion_reset();
+    tmx_fake_dht_frame(4, frame, ESP_ERR_TIMEOUT);
+    d->dht_start(4, 1);
+    tmx_fake_complete_pending();
+    TEST_ASSERT_TRUE(tmx_completion_take(&c));
+    TEST_ASSERT_EQUAL(ESP_ERR_TIMEOUT, c.err);
+}
+
+TEST_CASE("On complete_pending after a sonar_start: the scripted echo is posted; 0 us is a timeout", "[fake]")
+{
+    tmx_completion_t c;
+    tmx_fake_reset();
+    tmx_completion_reset();
+    tmx_fake_sonar_echo(5, 5800);
+    d->sonar_start(5, 6, 0x42);
+    d->sonar_start(9, 10, 0x43);
+    tmx_fake_complete_pending();
+    TEST_ASSERT_TRUE(tmx_completion_take(&c));
+    TEST_ASSERT_EQUAL(TMX_COMPLETION_SONAR, c.kind);
+    TEST_ASSERT_EQUAL_UINT32(0x42, c.token);
+    TEST_ASSERT_EQUAL(ESP_OK, c.err);
+    TEST_ASSERT_EQUAL_UINT32(5800, c.value);
+    TEST_ASSERT_TRUE(tmx_completion_take(&c));
+    TEST_ASSERT_EQUAL_UINT32(0x43, c.token);
+    TEST_ASSERT_EQUAL(ESP_ERR_TIMEOUT, c.err);
+}
+
+TEST_CASE("On several pending starts: complete_pending posts them in start order, once", "[fake]")
+{
+    tmx_completion_t c;
+    tmx_fake_reset();
+    tmx_completion_reset();
+    d->sonar_start(5, 6, 1);
+    d->dht_start(4, 2);
+    d->sonar_start(7, 8, 3);
+    tmx_fake_complete_pending();
+    for (uint32_t want = 1; want <= 3; want++) {
+        TEST_ASSERT_TRUE(tmx_completion_take(&c));
+        TEST_ASSERT_EQUAL_UINT32(want, c.token);
+    }
+    TEST_ASSERT_FALSE(tmx_completion_take(&c));
+    tmx_fake_complete_pending();
+    TEST_ASSERT_FALSE(tmx_completion_take(&c));
+}
+
+TEST_CASE("On a dht_start the test made fail: nothing is pending for it", "[fake]")
+{
+    tmx_completion_t c;
+    tmx_fake_reset();
+    tmx_completion_reset();
+    tmx_fake_fail_next("dht_start", ESP_FAIL);
+    TEST_ASSERT_EQUAL(ESP_FAIL, d->dht_start(4, 1));
+    tmx_fake_complete_pending();
+    TEST_ASSERT_FALSE(tmx_completion_take(&c));
+}
+
+TEST_CASE("On tmx_fake_reset: pending starts are forgotten", "[fake]")
+{
+    tmx_completion_t c;
+    tmx_fake_reset();
+    tmx_completion_reset();
+    d->dht_start(4, 1);
+    tmx_fake_reset();
+    tmx_fake_complete_pending();
+    TEST_ASSERT_FALSE(tmx_completion_take(&c));
 }

@@ -86,6 +86,9 @@ uint32_t tmx_deadline_left(const tmx_deadline_t *d, uint32_t now_ms);
 
 #define TMX_COMPLETION_RING 16
 
+#define TMX_COMPLETION_DHT 1
+#define TMX_COMPLETION_SONAR 2
+
 /** An asynchronous driver result (DHT frame, sonar echo) carrying the token given to dht_start or sonar_start. */
 typedef struct {
     uint8_t kind;

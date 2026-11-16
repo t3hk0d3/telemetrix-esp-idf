@@ -1,0 +1,134 @@
+#include <string.h>
+
+#include "tmx_adapter.h"
+
+#define STOCK_BUS 0
+#define OW_MATCH_ROM 0x55
+#define OW_SKIP_ROM 0xCC
+
+static const telemetrix_onewire_bus_t *stock_grant(const tmx_adapter_t *a)
+{
+    for (size_t i = 0; i < a->profile->n_onewire; i++) {
+        if (a->profile->onewire[i].bus == STOCK_BUS) {
+            return &a->profile->onewire[i];
+        }
+    }
+    return NULL;
+}
+
+static bool init(tmx_adapter_t *a, const uint8_t *p)
+{
+    const telemetrix_onewire_bus_t *grant = stock_grant(a);
+    if (!grant) {
+        return false;
+    }
+    if (a->onewire.open) {
+        return true;
+    }
+    int gpio = grant->gpio >= 0 ? grant->gpio : p[0];
+    const telemetrix_pin_t *pin = tmx_profile_pin(a->profile, (uint8_t)gpio);
+    if (!pin || !(pin->caps & TELEMETRIX_CAP_ONE_WIRE) || tmx_pin_use(&a->claims, (uint8_t)gpio) != TMX_USE_NONE ||
+            tmx_claim_pin(&a->claims, (uint8_t)gpio, TMX_USE_ONE_WIRE) != ESP_OK) {
+        return false;
+    }
+    if (tmx_claim_rmt_rx(&a->claims) != ESP_OK) {
+        tmx_release_pin(&a->claims, (uint8_t)gpio);
+        return false;
+    }
+    if (a->drv->ow_open(STOCK_BUS, (uint8_t)gpio) != ESP_OK) {
+        tmx_release_rmt_rx(&a->claims);
+        tmx_release_pin(&a->claims, (uint8_t)gpio);
+        return false;
+    }
+    a->onewire.open = true;
+    return true;
+}
+
+/** Dallas/Maxim CRC-8: polynomial x^8 + x^5 + x^4 + 1, reflected, initial value 0. */
+static uint8_t crc8(const uint8_t *data, size_t n)
+{
+    uint8_t crc = 0;
+    for (size_t i = 0; i < n; i++) {
+        uint8_t byte = data[i];
+        for (int bit = 0; bit < 8; bit++) {
+            uint8_t mix = (crc ^ byte) & 1;
+            crc >>= 1;
+            if (mix) {
+                crc ^= 0x8C;
+            }
+            byte >>= 1;
+        }
+    }
+    return crc;
+}
+
+static void reply(tmx_adapter_t *a, uint8_t subtype, const uint8_t *data, size_t n)
+{
+    uint8_t out[TMX_REPORT_MAX];
+    tmx_adapter_emit(a, out, tmx_rpt_onewire(out, subtype, data, n), true, TMX_COALESCE_NONE, 0);
+}
+
+static void search(tmx_adapter_t *a)
+{
+    uint8_t rom[8];
+    if (!a->drv->ow_search(STOCK_BUS, rom)) {
+        memset(rom, 0xff, sizeof(rom));
+    }
+    reply(a, TMX_CMD_ONE_WIRE_SEARCH, rom, sizeof(rom));
+}
+
+bool tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len)
+{
+    (void)len;
+    const tmx_drv_t *d = a->drv;
+    if (id == TMX_CMD_ONE_WIRE_INIT) {
+        return init(a, p);
+    }
+    if (id == TMX_CMD_ONE_WIRE_CRC8) {     /* [n, bytes...]: the stock client's extra byte is ignored */
+        uint8_t crc = crc8(p + 1, p[0]);
+        reply(a, id, &crc, 1);
+        return true;
+    }
+    if (!a->onewire.open) {
+        return false;
+    }
+    switch (id) {
+    case TMX_CMD_ONE_WIRE_RESET: {
+        uint8_t present = d->ow_reset(STOCK_BUS) ? 1 : 0;
+        reply(a, id, &present, 1);
+        break;
+    }
+    case TMX_CMD_ONE_WIRE_SELECT:
+        d->ow_write(STOCK_BUS, OW_MATCH_ROM, false);
+        for (int i = 0; i < 8; i++) {
+            d->ow_write(STOCK_BUS, p[i], false);
+        }
+        break;
+    case TMX_CMD_ONE_WIRE_SKIP:
+        d->ow_write(STOCK_BUS, OW_SKIP_ROM, false);
+        break;
+    case TMX_CMD_ONE_WIRE_WRITE:
+        d->ow_write(STOCK_BUS, p[0], p[1] != 0);
+        break;
+    case TMX_CMD_ONE_WIRE_READ: {
+        uint8_t byte = d->ow_read(STOCK_BUS);
+        reply(a, id, &byte, 1);
+        break;
+    }
+    case TMX_CMD_ONE_WIRE_RESET_SEARCH:
+        d->ow_reset_search(STOCK_BUS);
+        break;
+    default:
+        search(a);
+        break;
+    }
+    return true;
+}
+
+void tmx_onewire_release(tmx_adapter_t *a)
+{
+    if (a->onewire.open) {
+        a->drv->ow_close(STOCK_BUS);
+    }
+    a->onewire.open = false;
+}

@@ -10,7 +10,7 @@
 #define DIGITAL_CAPS (TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_DOUT | TELEMETRIX_CAP_PULL_UP | TELEMETRIX_CAP_PULL_DOWN)
 #define PIN(g, c, s, u, ch) {.gpio = (g), .caps = (c), .safe = (s), .adc_unit = (u), .adc_channel = (ch)}
 
-/* 2 drives low and has PWM; 4 has no pull-down; 12..16 are PWM pins; 34 and 35 are ADC inputs; 21 is I2C. */
+/* 2 drives low and has PWM; 4 has no pull-down; 12..16 are PWM pins; 34 and 35 are ADC inputs; 21 and 22 are I2C, 23 is 1-wire. */
 static const telemetrix_pin_t fx_pins[] = {
     PIN(2, DIGITAL_CAPS | TELEMETRIX_CAP_PWM, TELEMETRIX_SAFE_DRIVE_LOW, -1, -1),
     PIN(4, TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_DOUT | TELEMETRIX_CAP_PULL_UP, TELEMETRIX_SAFE_PULL_UP, -1, -1),
@@ -20,6 +20,8 @@ static const telemetrix_pin_t fx_pins[] = {
     PIN(15, DIGITAL_CAPS | TELEMETRIX_CAP_PWM, TELEMETRIX_SAFE_FLOAT, -1, -1),
     PIN(16, DIGITAL_CAPS | TELEMETRIX_CAP_PWM, TELEMETRIX_SAFE_FLOAT, -1, -1),
     PIN(21, DIGITAL_CAPS | TELEMETRIX_CAP_I2C, TELEMETRIX_SAFE_DRIVE_HIGH, -1, -1),
+    PIN(22, DIGITAL_CAPS | TELEMETRIX_CAP_I2C, TELEMETRIX_SAFE_DRIVE_HIGH, -1, -1),
+    PIN(23, DIGITAL_CAPS | TELEMETRIX_CAP_ONE_WIRE, TELEMETRIX_SAFE_FLOAT, -1, -1),
     PIN(34, TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_ADC, TELEMETRIX_SAFE_FLOAT, 1, 6),
     PIN(35, TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_ADC, TELEMETRIX_SAFE_FLOAT, 1, 7),
 };
@@ -55,23 +57,31 @@ static void fx_emit(const uint8_t *report, size_t n, bool reply, int8_t kind, ui
     }
 }
 
-/** A fresh adapter on the fake driver; the call log is empty afterwards. */
-static inline void fx_start(void)
+/** A fresh adapter on the fake driver; the call log is empty afterwards. i2c and ow are the grants of bus 0 (NULL =
+ *  the profile has no such bus). */
+static inline void fx_start_buses(const telemetrix_i2c_bus_t *i2c, const telemetrix_onewire_bus_t *ow)
 {
     fx_profile = (telemetrix_profile_t) {
         .pins = fx_pins, .n_pins = sizeof(fx_pins) / sizeof(fx_pins[0]),
         .ledc = {.speed_mode = 0, .timer_mask = 0x0f, .channel_mask = 0xff},
         .rmt = {.rx_channels = 1, .tx_channels = 1},
         .adc = fx_adc, .n_adc = 1,
+        .i2c = i2c, .n_i2c = i2c ? 1 : 0, .onewire = ow, .n_onewire = ow ? 1 : 0,
     };
     /* the defaults the adapter reads (telemetrix_config_default arrives with the public API) */
     fx_cfg = (telemetrix_config_t) {
         .i2c_timeout_ms = 50, .analog_interval_floor_ms = 10, .max_dht = 6, .max_sonar = 6, .max_servo = 4,
     };
     tmx_fake_reset();
+    tmx_completion_reset();
     fx_n_reports = 0;
     TEST_ASSERT_EQUAL(ESP_OK, tmx_adapter_init(&fx_a, &fx_profile, &fx_cfg, &tmx_drv_fake, fx_emit, NULL));
     tmx_fake_reset();
+}
+
+static inline void fx_start(void)
+{
+    fx_start_buses(NULL, NULL);
 }
 
 static inline void fx_send(uint8_t id, const uint8_t *payload, size_t len, uint32_t now)

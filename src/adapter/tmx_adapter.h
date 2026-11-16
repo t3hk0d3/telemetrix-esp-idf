@@ -24,6 +24,8 @@ typedef void (*tmx_emit_fn)(const uint8_t *report, size_t n, bool reply, int8_t 
 
 #define TMX_DIGITAL_POLL_MS 2
 #define TMX_ANALOG_DEFAULT_MS 19
+#define TMX_SONAR_SLOT_MS 33
+#define TMX_DHT_PASS_MS 2000
 
 /* Per-feature state, one sub-struct per source file; tables are indexed by profile pin index. */
 typedef struct {
@@ -49,6 +51,36 @@ typedef struct {
     uint16_t max_us[TMX_MAX_PINS];
 } tmx_pwm_t;
 
+typedef struct {
+    bool open;                  /**< bus 0 opened through the driver */
+} tmx_i2c_t;
+
+typedef struct {
+    bool open;                  /**< bus 0 opened; holds one RMT RX claim and the bus pin claim */
+} tmx_onewire_t;
+
+/** Sonar and DHT devices are indexed in registration order; a completion token is (generation << 8 | index). */
+typedef struct {
+    uint32_t generation;        /**< bumped by every release; survives it, so late completions are recognised */
+    uint8_t n_sonar;
+    uint8_t sonar_trig[TMX_MAX_PINS];
+    uint8_t sonar_echo[TMX_MAX_PINS];
+    uint16_t sonar_last[TMX_MAX_PINS];
+    bool sonar_has_last[TMX_MAX_PINS];
+    uint8_t sonar_next_dev;     /**< round-robin cursor */
+    bool sonar_busy;            /**< a ping is in flight: never two */
+    uint8_t sonar_busy_dev;
+    uint8_t sonar_lost;         /**< slots passed with the ping still in flight */
+    tmx_deadline_t sonar_slot;  /**< next 33 ms slot */
+    uint8_t n_dht;
+    uint8_t dht_pin[TMX_MAX_PINS];
+    bool dht_rmt;               /**< the shared RMT RX channel is claimed */
+    bool dht_cycle;             /**< a pass over all devices is running */
+    uint8_t dht_cursor;         /**< device being read, or the next to read */
+    bool dht_busy;
+    tmx_deadline_t dht_pass;    /**< next 2000 ms pass */
+} tmx_sensors_t;
+
 /** Fully defined so it can live on a stack or in static storage. */
 struct tmx_adapter {
     const telemetrix_profile_t *profile;
@@ -64,6 +96,9 @@ struct tmx_adapter {
     tmx_digital_t digital;
     tmx_analog_t analog;
     tmx_pwm_t pwm;
+    tmx_i2c_t i2c;
+    tmx_onewire_t onewire;
+    tmx_sensors_t sensors;
 };
 typedef struct tmx_adapter tmx_adapter_t;
 
@@ -124,5 +159,26 @@ bool tmx_servo_write(tmx_adapter_t *a, uint8_t gpio, uint8_t angle);
 bool tmx_servo_detach(tmx_adapter_t *a, uint8_t gpio);
 /** Stop the LEDC channel of a PWM or servo pin and forget its state; the claim itself stays. */
 void tmx_pwm_forget(tmx_adapter_t *a, int idx);
+
+/* i2c.c */
+/** I2C_BEGIN, I2C_READ, I2C_WRITE (ids 9-11); false = refused. */
+bool tmx_i2c_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len);
+/** Close bus 0 when open; the claims go with tmx_claims_release_all. */
+void tmx_i2c_release(tmx_adapter_t *a);
+
+/* onewire.c */
+/** ONE_WIRE_INIT .. ONE_WIRE_CRC8 (ids 27-35); false = refused. */
+bool tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len);
+void tmx_onewire_release(tmx_adapter_t *a);
+
+/* sensors.c */
+bool tmx_sonar_new(tmx_adapter_t *a, uint8_t trig, uint8_t echo, uint32_t now_ms);
+bool tmx_dht_new(tmx_adapter_t *a, uint8_t pin, uint32_t now_ms);
+/** Drain the completion queue and start the sonar ping and DHT read that are due. Never waits. */
+void tmx_sensors_poll(tmx_adapter_t *a, uint32_t now_ms);
+/** Milliseconds until the next sensor deadline, UINT32_MAX when none or while reports are stopped. */
+uint32_t tmx_sensors_left(const tmx_adapter_t *a, uint32_t now_ms);
+/** Forget every device and bump the generation. The RMT RX claim goes with tmx_claims_release_all. */
+void tmx_sensors_release(tmx_adapter_t *a);
 
 #endif

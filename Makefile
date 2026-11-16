@@ -21,15 +21,17 @@ test-host: ## Host unit tests on the ESP-IDF linux target
 	$(IDF) tools/run_host_tests.sh
 
 FUZZ_BUILD ?= test/fuzz/build
-FUZZ_TARGETS ?= fuzz_frame
+FUZZ_TARGETS ?= fuzz_frame fuzz_adapter
 
 fuzz: ## Fuzz the frame assembler and the adapter (60 s per target)
 	cmake -S test/fuzz -B $(FUZZ_BUILD) -DCMAKE_C_COMPILER=clang
 	cmake --build $(FUZZ_BUILD)
+	status=0; \
 	for t in $(FUZZ_TARGETS); do \
-		mkdir -p $(FUZZ_BUILD)/work/$$t; \
-		$(FUZZ_BUILD)/$$t -max_total_time=60 $(FUZZ_BUILD)/work/$$t test/fuzz/corpus/$$t; \
-	done
+		mkdir -p $(FUZZ_BUILD)/work/$$t test/fuzz/corpus/$$t; \
+		$(FUZZ_BUILD)/$$t -max_total_time=60 $(FUZZ_BUILD)/work/$$t test/fuzz/corpus/$$t || status=1; \
+	done; \
+	exit $$status
 
 host-server: ## Run the server on the linux target with fake drivers
 	@echo "host-server: not yet"
