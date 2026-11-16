@@ -446,6 +446,27 @@ Each milestone ends with review, fixes and one batched spare-board pass.
 - **M3: streams.** The streams plugin with UART (DE, flow control, buffers) and SPI (worker task, DMA buffers), side
   ports with address binding and tokens, idle and connect limits; client stream API; loopback tests on spare boards.
   Done when a UART and an SPI stream pass the loopback tests through our client.
+- **M4: documentation and site.** A documentation site on GitHub Pages covering the finished v1 (server, client,
+  extended mode, plugins, streams). Built with MkDocs Material; deployed by a GitHub Actions workflow on pushes to
+  `main` and on release tags, versioned per release with `mike` (`latest` plus each release). Content, arranged by
+  what the reader is doing:
+  - Getting started: one tutorial per example board, from flashing to the first awaited chain in our client;
+    a stock-client tutorial for existing Telemetrix users.
+  - How-to guides: writing a board profile (capabilities, safe states, grants); embedding in an existing
+    application (shared I2C/ADC handles, Wi-Fi/Ethernet bring-up, the requirements now in the README); writing a
+    plugin; porting to a new chip or board; hardening (allowed addresses, access hook); using streams.
+  - Reference: the wire protocol byte by byte for stock and extended mode (every command, report, reason code and
+    discovery record); Kconfig options; the C API generated from `telemetrix.h` and the plugin header (Doxygen
+    through mkdoxy); the Python client API generated from its docstrings (mkdocstrings).
+  - Explanation: architecture (layers, network task, completion ring), back-pressure and coalescing, the handshake
+    and mode selection, safety model, deviations from upstream and the upstream bugs found.
+  - Compatibility matrix (chips, boards, upstream firmware and client versions), troubleshooting, contributing,
+    changelog.
+  The README shrinks to a landing page (what it is, a 30-line quick start, links into the site). CI fails the docs
+  build on broken internal links, missing API docs for public symbols, and on code samples that no longer run:
+  Python samples execute against the host-built server; C samples compile in a sample-build target.
+  Done when the site is live on Pages, every public C symbol and client method has reference docs, and the docs CI
+  job passes.
 
 ## 7. Decided vs left to the builder
 
@@ -463,6 +484,8 @@ Decided by the user:
   (2026-11-12)
 - After the adversarial review: fold its fixes in as milestones M1–M3; keep SPI streams and stock mode in v1.
   (2026-11-16)
+- Comprehensive documentation as milestone M4, published on GitHub Pages with MkDocs Material; public repository
+  from the start, before the Telemetrix author is contacted. (2026-11-16)
 
 Claude's calls (open to the user's correction), most from the review:
 
@@ -486,6 +509,8 @@ Claude's calls (open to the user's correction), most from the review:
 - The handshake timeout 3 s and the default await timeout 5 s; stock-mode client never sends RESET.
 - The Olimex ESP32-POE as the main compatibility board with a recording proxy; the S3 second.
 - Client provisional name; asyncio only in v1; no automatic reconnect.
+- Docs: reader-task arrangement (tutorials, how-tos, reference, explanation); `mike` versioning; README slimmed to a
+  landing page in M4; samples executed in CI; Doxygen via mkdoxy for the C reference.
 
 Left to the builder: byte values of new ids and reason codes, exact field widths inside discovery records, queue and
 buffer sizes not fixed here, the task layout within each milestone, ready-made dev-board profiles, and CI.
