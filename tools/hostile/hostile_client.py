@@ -7,7 +7,12 @@ a fresh connection must still get the handshake answer and a LOOP reply; otherwi
     hostile_client.py --host H --port P --mode {flood,garbage,ext-garbage,stall,storm,all} [--seconds N]
 
 `stall` waits up to --stall-limit seconds (default 20) for the server to drop the client that does not read; the
-server's default is 10 s (start the host server with --stall-ms to shorten it).
+server's default is 10 s (start the host server with --stall-ms to shorten it). `stall` needs Linux: it reads the
+socket's TCP state from TCP_INFO, because a client that does not read cannot see the peer's close through recv (a
+peek returns the buffered reports, not EOF) and a send may keep succeeding into the buffer. Without TCP_INFO (macOS,
+Windows) the mode exits 1 with "stall mode needs Linux TCP_INFO"; the other modes run anywhere.
+
+WARNING: garbage and ext-garbage send arbitrary commands and may drive pins of the target board.
 """
 
 from __future__ import annotations
@@ -28,7 +33,6 @@ STORM_SECONDS = 3.0  # at most this long opening connections
 STORM_CONNECT_SECONDS = 0.2  # a full accept backlog must not stall the storm
 PROBE_SECONDS = 8.0  # how long a fresh connection is retried: the server serves one client and must first see the last gone
 IO_TIMEOUT = 3.0
-TCP_CLOSE_WAIT = 8
 MODES = ("flood", "garbage", "ext-garbage", "stall", "storm")
 
 
@@ -61,9 +65,12 @@ def probe_once(host: str, port: int) -> None:
         sock.settimeout(IO_TIMEOUT)
         sock.sendall(packet(CMD_GET_FIRMWARE_VERSION, bytes([MAGIC, 1, 0])))
         answer = recv_report(sock)
-        if list(answer[:4]) != [CMD_GET_FIRMWARE_VERSION, 3, 2, 100] or answer[
-            4:
-        ] not in (b"", bytes([MAGIC, 1, 0])):
+        # [5, major, minor, build] (stock) or that plus [MAGIC, ext major, ext minor] (extended): any firmware version
+        if (
+            len(answer) not in (4, 7)
+            or answer[0] != CMD_GET_FIRMWARE_VERSION
+            or (len(answer) == 7 and answer[4] != MAGIC)
+        ):
             raise ProbeFailed(f"handshake answer {list(answer)}")
         sock.sendall(packet(CMD_LOOP, b"\x42"))
         if list(recv_report(sock)) != [CMD_LOOP, 0x42]:
@@ -206,13 +213,15 @@ def dropped(sock: socket.socket) -> bool:
     """True once the peer closed or reset. Linux: the TCP state from TCP_INFO (the buffered reports stay unread)."""
     try:
         info = sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_INFO, 8)
-    except (OSError, AttributeError):
-        return False
+    except OSError:
+        return True  # the socket is no longer valid
     return struct.unpack("B", info[:1])[0] != 1  # 1 = ESTABLISHED
 
 
 def stall(host: str, port: int, limit: float) -> None:
     """Send LOOPs and never read: the server's send buffer fills, then it must drop us within `limit` seconds."""
+    if not hasattr(socket, "TCP_INFO"):
+        raise ProbeFailed("stall mode needs Linux TCP_INFO")
     sock = connect(host, port)
     if sock is None:
         raise ProbeFailed("the server accepted no connection for the stalled client")

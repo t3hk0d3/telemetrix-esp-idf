@@ -1,5 +1,7 @@
 """tools/hostile/hostile_client.py against the host server: it survives and leaks no file descriptors."""
 
+import importlib.util
+import socket
 import subprocess
 import sys
 import time
@@ -73,3 +75,44 @@ def test_unreachable_server_exits_non_zero():
         timeout=60,
     )
     assert result.returncode == 1
+
+
+def test_stall_without_tcp_info_exits_non_zero_with_a_clear_message(
+    make_server, monkeypatch, capsys
+):
+    spec = importlib.util.spec_from_file_location("hostile_client", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.delattr(socket, "TCP_INFO", raising=False)
+    srv = make_server("--stall-ms", STALL_MS)
+    code = module.main(
+        ["--host", LOCALHOST, "--port", str(srv.port), "--mode", "stall"]
+    )
+    assert (code, "stall mode needs Linux TCP_INFO" in capsys.readouterr().err) == (
+        1,
+        True,
+    )
+
+
+def test_probe_accepts_another_stock_firmware_version(monkeypatch):
+    spec = importlib.util.spec_from_file_location("hostile_client", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class Sock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def settimeout(self, t):
+            pass
+
+        def sendall(self, data):
+            pass
+
+    replies = iter([[5, 3, 3, 7, 0xA7, 1, 0], [0, 0x42]])
+    monkeypatch.setattr(module.socket, "create_connection", lambda *a, **k: Sock())
+    monkeypatch.setattr(module, "recv_report", lambda sock: bytes(next(replies)))
+    module.probe_once(LOCALHOST, 1)

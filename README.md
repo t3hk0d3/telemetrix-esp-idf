@@ -405,7 +405,9 @@ while the socket is backed up a fast pulse (0, 1, 0) on a digital input can reac
 - `tools/hostile/hostile_client.py --host H --port P --mode {flood,garbage,ext-garbage,stall,storm,all}`: a standalone
   hostile client (standard library only). After each mode a fresh connection must still get the handshake answer and a
   LOOP reply. It runs in `make test-integration` against the host server (which also checks that no file descriptor
-  leaks) and can be pointed at a board; the stall drop takes the server's `send_stall_ms` (10 s by default).
+  leaks) and can be pointed at a board; the stall drop takes the server's `send_stall_ms` (10 s by default). `stall` needs Linux (it
+  reads the TCP state from `TCP_INFO`; elsewhere it exits 1 with "stall mode needs Linux TCP_INFO"). Warning: `garbage`
+  and `ext-garbage` send arbitrary commands and may drive pins of the target board.
 - `make client-test` and `make client-integration`: the Python client's unit tests and its tests against the host server.
 - `make build-examples`: build every board example.
 
