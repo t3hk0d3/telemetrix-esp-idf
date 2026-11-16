@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -351,4 +352,62 @@ TEST_CASE("server with an application-owned I2C bus 0: start, a client reading i
     TEST_ASSERT_TRUE(calls_have("gpio_output(2,1)"));          /* the log holds the start's safe states */
     TEST_ASSERT_FALSE(calls_have("(25,"));
     TEST_ASSERT_FALSE(calls_have("(26,"));
+}
+
+/** The server's end of the connection whose client end is fd: the socket bound to the server port whose peer is fd's
+ *  local address. -1 when there is none. */
+static int server_end_of(int fd)
+{
+    struct sockaddr_in mine;
+    socklen_t len = sizeof(mine);
+    TEST_ASSERT_EQUAL(0, getsockname(fd, (struct sockaddr *)&mine, &len));
+    for (int cand = 0; cand < 1024; cand++) {
+        struct sockaddr_storage local, peer;
+        socklen_t llen = sizeof(local), plen = sizeof(peer);
+        if (cand == fd || getsockname(cand, (struct sockaddr *)&local, &llen) != 0 ||
+                getpeername(cand, (struct sockaddr *)&peer, &plen) != 0) {
+            continue;
+        }
+        uint16_t local_port = local.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&local)->sin6_port :
+                              ((struct sockaddr_in *)&local)->sin_port;
+        uint16_t peer_port = peer.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&peer)->sin6_port :
+                             ((struct sockaddr_in *)&peer)->sin_port;
+        if (ntohs(local_port) == port && peer_port == mine.sin_port) {
+            return cand;
+        }
+    }
+    return -1;
+}
+
+static int int_option(int fd, int level, int opt)
+{
+    int v = -1;
+    socklen_t len = sizeof(v);
+    TEST_ASSERT_EQUAL(0, getsockopt(fd, level, opt, &v, &len));
+    return v;
+}
+
+TEST_CASE("server accepting a client: keepalive on with the configured idle, interval and count, TCP_NODELAY on",
+          "[server]")
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.keepalive_idle_s = 7;                           /* not the defaults, so the values are the config's */
+    cfg.keepalive_intvl_s = 3;
+    cfg.keepalive_count = 4;
+    start_server(&cfg);
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    int srv = server_end_of(c);
+    TEST_ASSERT_TRUE(srv >= 0);
+    TEST_ASSERT_EQUAL(1, int_option(srv, SOL_SOCKET, SO_KEEPALIVE));
+    TEST_ASSERT_EQUAL(7, int_option(srv, IPPROTO_TCP, TCP_KEEPIDLE));
+    TEST_ASSERT_EQUAL(3, int_option(srv, IPPROTO_TCP, TCP_KEEPINTVL));
+    TEST_ASSERT_EQUAL(4, int_option(srv, IPPROTO_TCP, TCP_KEEPCNT));
+    TEST_ASSERT_EQUAL(1, int_option(srv, IPPROTO_TCP, TCP_NODELAY));
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
 }
