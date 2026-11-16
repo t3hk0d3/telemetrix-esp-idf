@@ -50,4 +50,9 @@ test-integration: host-server $(VENV)/.installed ## pytest integration tests aga
 	$(VENV)/bin/python -m pytest tools/tests
 
 build-examples: ## Build every example for the targets it lists
-	@echo "build-examples: not yet"
+	for ex in examples/*; do \
+		for t in $$(cat $$ex/targets); do \
+			$(IDF) idf.py -C $$ex -B $$ex/build-$$t -DIDF_TARGET=$$t \
+				-DSDKCONFIG=$(CURDIR)/$$ex/build-$$t/sdkconfig build; \
+		done; \
+	done

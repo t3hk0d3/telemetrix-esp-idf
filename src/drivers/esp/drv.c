@@ -1,64 +1,7 @@
-#include "tmx_drv.h"
+#include "tmx_drv_esp.h"
 
-/* Chip driver: every operation reports ESP_ERR_NOT_SUPPORTED until the peripherals are filled in (tasks 10 and 11).
- * init succeeds, so the server starts with an empty profile. */
-
-static esp_err_t n_gpio_input(uint8_t gpio, bool pull_up, bool pull_down)
-{
-    (void)gpio, (void)pull_up, (void)pull_down;
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-static esp_err_t n_gpio_output(uint8_t gpio, bool level)
-{
-    (void)gpio, (void)level;
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-static void n_gpio_set(uint8_t gpio, bool v)
-{
-    (void)gpio, (void)v;
-}
-
-static int n_gpio_get(uint8_t gpio)
-{
-    (void)gpio;
-    return 0;
-}
-
-static esp_err_t n_ledc_timer(uint8_t speed_mode, uint8_t timer, uint32_t freq_hz, uint8_t resolution)
-{
-    (void)speed_mode, (void)timer, (void)freq_hz, (void)resolution;
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-static esp_err_t n_ledc_attach(uint8_t speed_mode, uint8_t channel, uint8_t timer, uint8_t gpio)
-{
-    (void)speed_mode, (void)channel, (void)timer, (void)gpio;
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-static esp_err_t n_ledc_duty(uint8_t speed_mode, uint8_t channel, uint32_t duty)
-{
-    (void)speed_mode, (void)channel, (void)duty;
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-static void n_ledc_stop(uint8_t speed_mode, uint8_t channel)
-{
-    (void)speed_mode, (void)channel;
-}
-
-static void n_ledc_timer_free(uint8_t speed_mode, uint8_t timer)
-{
-    (void)speed_mode, (void)timer;
-}
-
-static esp_err_t n_adc_read(uint8_t unit, uint8_t channel, int *raw)
-{
-    (void)unit, (void)channel, (void)raw;
-    return ESP_ERR_NOT_SUPPORTED;
-}
+/* Chip driver table. GPIO, LEDC and ADC are real (drv_gpio.c, drv_ledc.c, drv_adc.c); the rest reports
+ * ESP_ERR_NOT_SUPPORTED until task 11. */
 
 static esp_err_t n_i2c_open(uint8_t bus, const telemetrix_i2c_bus_t *grant, int8_t sda, int8_t scl)
 {
@@ -137,25 +80,25 @@ static esp_err_t n_sonar_start(uint8_t trig, uint8_t echo, uint32_t token)
 
 static esp_err_t n_init(const telemetrix_profile_t *p)
 {
-    (void)p;
-    return ESP_OK;
+    return esp_adc_init(p);
 }
 
 static void n_deinit(void)
 {
+    esp_adc_deinit();
 }
 
-static const tmx_drv_t drv_esp = {
-    .gpio_input = n_gpio_input,
-    .gpio_output = n_gpio_output,
-    .gpio_set = n_gpio_set,
-    .gpio_get = n_gpio_get,
-    .ledc_timer = n_ledc_timer,
-    .ledc_attach = n_ledc_attach,
-    .ledc_duty = n_ledc_duty,
-    .ledc_stop = n_ledc_stop,
-    .ledc_timer_free = n_ledc_timer_free,
-    .adc_read = n_adc_read,
+const tmx_drv_t tmx_drv_esp = {
+    .gpio_input = esp_gpio_input,
+    .gpio_output = esp_gpio_output,
+    .gpio_set = esp_gpio_set,
+    .gpio_get = esp_gpio_get,
+    .ledc_timer = esp_ledc_timer,
+    .ledc_attach = esp_ledc_attach,
+    .ledc_duty = esp_ledc_duty,
+    .ledc_stop = esp_ledc_stop,
+    .ledc_timer_free = esp_ledc_timer_free,
+    .adc_read = esp_adc_read,
     .i2c_open = n_i2c_open,
     .i2c_read = n_i2c_read,
     .i2c_write = n_i2c_write,
@@ -173,4 +116,4 @@ static const tmx_drv_t drv_esp = {
     .deinit = n_deinit,
 };
 
-const tmx_drv_t *const tmx_drv_default = &drv_esp;
+const tmx_drv_t *const tmx_drv_default = &tmx_drv_esp;

@@ -13,14 +13,17 @@ endif()
 # The linux target runs against the scriptable fake driver, every chip target against the IDF drivers.
 if(IDF_TARGET STREQUAL "linux")
     file(GLOB tmx_drv_srcs "${CMAKE_CURRENT_LIST_DIR}/src/drivers/fake/*.c")
+    set(tmx_drv_requires "")
 else()
     file(GLOB tmx_drv_srcs "${CMAKE_CURRENT_LIST_DIR}/src/drivers/esp/*.c")
+    set(tmx_drv_requires esp_driver_gpio esp_driver_ledc esp_adc)
 endif()
 
 idf_component_register(SRCS ${tmx_proto_srcs} ${tmx_core_srcs} ${tmx_adapter_srcs} ${tmx_drv_srcs} ${tmx_net_srcs}
                        INCLUDE_DIRS "include"
-                       PRIV_INCLUDE_DIRS "src/proto" "src/core" "src/adapter" "src/drivers" "src/net"
-                       REQUIRES esp_common freertos log ${tmx_net_requires})
+                       PRIV_INCLUDE_DIRS "src/proto" "src/core" "src/adapter" "src/drivers" "src/drivers/esp" "src/net"
+                       REQUIRES esp_common freertos log ${tmx_net_requires}
+                       PRIV_REQUIRES ${tmx_drv_requires})
 
 # sock.c warns (#warning) when lwIP is built without SO_LINGER; IDF builds components with -Werror, so keep that one a warning.
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/net/sock.c" PROPERTIES COMPILE_OPTIONS -Wno-error=cpp)

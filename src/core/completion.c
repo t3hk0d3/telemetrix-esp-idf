@@ -5,23 +5,26 @@
 #if CONFIG_IDF_TARGET_LINUX
 #include <pthread.h>
 
+#define DRAM_ATTR
+
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 #define LOCK() pthread_mutex_lock(&lock)
 #define UNLOCK() pthread_mutex_unlock(&lock)
 #else
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
+#include "esp_attr.h"
 
-static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+static DRAM_ATTR portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 #define LOCK() portENTER_CRITICAL_SAFE(&lock)
 #define UNLOCK() portEXIT_CRITICAL_SAFE(&lock)
 #endif
 
-static tmx_completion_t ring[TMX_COMPLETION_RING];
-static unsigned head;  /* next to take */
-static unsigned count; /* queued entries */
-static uint32_t overflows;
-static void (*wake_fn)(void);
+static DRAM_ATTR tmx_completion_t ring[TMX_COMPLETION_RING];
+static DRAM_ATTR unsigned head;  /* next to take */
+static DRAM_ATTR unsigned count; /* queued entries */
+static DRAM_ATTR uint32_t overflows;
+static DRAM_ATTR void (*wake_fn)(void);
 
 static void no_wake(void)
 {
