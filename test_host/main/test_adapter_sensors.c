@@ -433,3 +433,62 @@ TEST_CASE("A DHT read whose completion never arrives: the next 2000 ms pass star
     tmx_adapter_poll(&fx_a, 2000);
     TEST_ASSERT_EQUAL(2, tmx_fake_count("dht_start"));
 }
+
+/* ---- session-scoped driver resources ---- */
+
+static const telemetrix_onewire_bus_t session_ow = {.bus = 0, .gpio = 23};
+
+static void assert_rx_matches(const char *step)
+{
+    TEST_ASSERT_EQUAL_MESSAGE(fx_a.claims.rmt_rx_used, tmx_fake_rmt_rx_live(), step);
+}
+
+TEST_CASE("DHT and 1-wire across RESET and a disconnect: RMT RX claims equal the driver's live channels after every step",
+          "[adapter]")
+{
+    fx_start_buses(NULL, &session_ow);
+    fx_profile.rmt.rx_channels = 2;             /* the DHT channel and the 1-wire bus */
+    tmx_fake_dht_frame(14, frame_ok, ESP_OK);
+    FX_SEND(TMX_CMD_DHT_NEW, 0, 14);
+    tmx_adapter_poll(&fx_a, 0);                 /* the first read creates the channel */
+    assert_rx_matches("DHT_NEW and its first read");
+    complete_and_poll(1);
+    assert_rx_matches("DHT read completed");
+    FX_SEND(TMX_CMD_ONE_WIRE_INIT, 2, 0);
+    TEST_ASSERT_EQUAL(2, tmx_fake_rmt_rx_live());
+    assert_rx_matches("ONE_WIRE_INIT");
+    FX_SEND0(TMX_CMD_RESET, 3);
+    TEST_ASSERT_EQUAL(0, tmx_fake_rmt_rx_live());
+    assert_rx_matches("RESET");
+    FX_SEND(TMX_CMD_DHT_NEW, 4, 15);
+    tmx_adapter_poll(&fx_a, 4);
+    assert_rx_matches("DHT_NEW after the RESET");
+    tmx_adapter_release(&fx_a);                 /* what a disconnect does */
+    TEST_ASSERT_EQUAL(0, tmx_fake_rmt_rx_live());
+    assert_rx_matches("disconnect");
+}
+
+TEST_CASE("A sonar ping before RESET: the release detaches the echo handler", "[adapter]")
+{
+    fx_start();
+    FX_SEND(TMX_CMD_SONAR_NEW, 0, 12, 13);
+    tmx_adapter_poll(&fx_a, 0);
+    TEST_ASSERT_TRUE(tmx_fake_sonar_handler());
+    FX_SEND0(TMX_CMD_RESET, 1);
+    TEST_ASSERT_FALSE(tmx_fake_sonar_handler());
+}
+
+TEST_CASE("A disconnect: the driver's release runs before the first safe state of a claimed pin", "[adapter]")
+{
+    fx_start();
+    FX_SEND(TMX_CMD_DHT_NEW, 0, 14);
+    tmx_adapter_poll(&fx_a, 0);
+    tmx_fake_reset();
+    tmx_adapter_release(&fx_a);
+    const char *calls = tmx_fake_calls();
+    const char *release = strstr(calls, "release()");
+    const char *safe = strstr(calls, "gpio_input(14,0,0)");
+    TEST_ASSERT_NOT_NULL(release);
+    TEST_ASSERT_NOT_NULL(safe);
+    TEST_ASSERT_TRUE(release < safe);
+}

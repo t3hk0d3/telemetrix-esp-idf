@@ -96,6 +96,7 @@ void tmx_adapter_release(tmx_adapter_t *a)
     tmx_i2c_release(a);         /* buses closed and devices dropped before their pins and RMT claims go */
     tmx_onewire_release(a);
     tmx_sensors_release(a);
+    a->drv->release();          /* the DHT channel and the echo handler, so the claims match what the driver holds */
     tmx_claims_release_all(&a->claims);
     clear_tables(a);
 }

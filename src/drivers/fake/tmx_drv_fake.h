@@ -28,6 +28,12 @@ void tmx_fake_ow_devices(uint8_t bus, const uint8_t (*roms)[8], size_t n);
 /** The next call of op (a driver function name, e.g. "ledc_timer") is recorded, does nothing else and returns err once.
  *  Works for every operation returning esp_err_t; cleared by tmx_fake_reset. */
 void tmx_fake_fail_next(const char *op, esp_err_t err);
+/** RMT RX channels the driver holds now: the shared DHT channel (from the first dht_start until release or deinit)
+ *  and one per open 1-wire bus. */
+size_t tmx_fake_rmt_rx_live(void);
+/** True while the echo handler of a sonar_start is attached (until release or deinit). */
+bool tmx_fake_sonar_handler(void);
+
 /** True once a call was left out of the log because it was full (cleared by tmx_fake_reset). */
 bool tmx_fake_log_truncated(void);
 

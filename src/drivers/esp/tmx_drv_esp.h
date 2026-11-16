@@ -47,11 +47,12 @@ bool esp_ow_search(uint8_t bus, uint8_t rom[8]);
 void esp_ow_reset_search(uint8_t bus);
 void esp_ow_close(uint8_t bus);
 
-/* DHT and sonar: start without blocking, complete once through tmx_completion_post; deinit frees the RMT channel, the
- * timers and the GPIO handler */
+/* DHT and sonar: start without blocking, complete once through tmx_completion_post; release (end of a session) abandons
+ * a measurement in flight and frees the RMT channel and the GPIO handler, deinit frees the timers as well */
 esp_err_t esp_dht_start(uint8_t gpio, uint32_t token);
 esp_err_t esp_sonar_start(uint8_t trig, uint8_t echo, uint32_t token);
 void esp_pulse_init(void);
+void esp_pulse_release(void);
 void esp_pulse_deinit(void);
 
 #endif

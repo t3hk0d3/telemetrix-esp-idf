@@ -43,6 +43,7 @@ const tmx_drv_t tmx_drv_esp = {
     .ow_close = esp_ow_close,
     .dht_start = esp_dht_start,
     .sonar_start = esp_sonar_start,
+    .release = esp_pulse_release,
     .init = n_init,
     .deinit = n_deinit,
 };

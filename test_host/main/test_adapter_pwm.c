@@ -280,7 +280,7 @@ TEST_CASE("RESET with PWM and servo pins: LEDC channels stopped before the safe 
     FX_SEND(TMX_CMD_SERVO_ATTACH, 0, 12, 0x02, 0x20, 0x09, 0x60);
     tmx_fake_reset();
     FX_SEND0(TMX_CMD_RESET, 0);
-    TEST_ASSERT_EQUAL_STRING("ledc_stop(0,0)\nledc_timer_free(0,0)\nledc_stop(0,1)\nledc_timer_free(0,1)\n"
+    TEST_ASSERT_EQUAL_STRING("release()\nledc_stop(0,0)\nledc_timer_free(0,0)\nledc_stop(0,1)\nledc_timer_free(0,1)\n"
                              "gpio_output(2,0)\ngpio_input(12,0,0)\n", tmx_fake_calls());
     TEST_ASSERT_TRUE(tmx_adapter_reset_requested(&fx_a));
     send_pwm(2, 8, 5000.0, 0);                  /* every channel and timer is free again */

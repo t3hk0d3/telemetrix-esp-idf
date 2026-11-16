@@ -46,6 +46,9 @@ typedef struct {
         uint32_t token;
     } pending[FAKE_PENDING];
     size_t n_pending;
+    bool dht_rx;            /**< the shared DHT RX channel exists (created by the first dht_start, as on chips) */
+    bool ow_rx[FAKE_BUSES]; /**< a 1-wire bus is open and holds its RX channel */
+    bool sonar_handler;     /**< the echo handler of the last sonar_start is still attached */
     struct {
         char op[24];
         esp_err_t err;
@@ -197,6 +200,20 @@ static esp_err_t injected(const char *op)
         }
     }
     return ESP_OK;
+}
+
+size_t tmx_fake_rmt_rx_live(void)
+{
+    size_t n = fake.dht_rx ? 1 : 0;
+    for (int i = 0; i < FAKE_BUSES; i++) {
+        n += fake.ow_rx[i] ? 1 : 0;
+    }
+    return n;
+}
+
+bool tmx_fake_sonar_handler(void)
+{
+    return fake.sonar_handler;
 }
 
 bool tmx_fake_log_truncated(void)
@@ -390,6 +407,9 @@ static esp_err_t f_ow_open(uint8_t bus, uint8_t gpio)
     if (inj != ESP_OK) {
         return inj;
     }
+    if (bus < FAKE_BUSES) {
+        fake.ow_rx[bus] = true;
+    }
     return ESP_OK;
 }
 
@@ -431,6 +451,9 @@ static void f_ow_reset_search(uint8_t bus)
 static void f_ow_close(uint8_t bus)
 {
     record("ow_close(%u)", bus);
+    if (bus < FAKE_BUSES) {
+        fake.ow_rx[bus] = false;
+    }
 }
 
 static esp_err_t add_pending(bool dht, uint8_t gpio, uint32_t token)
@@ -456,6 +479,7 @@ static esp_err_t f_dht_start(uint8_t gpio, uint32_t token)
     if (inj != ESP_OK) {
         return inj;
     }
+    fake.dht_rx = true;
     return add_pending(true, gpio, token);
 }
 
@@ -467,7 +491,15 @@ static esp_err_t f_sonar_start(uint8_t trig, uint8_t echo, uint32_t token)
     if (inj != ESP_OK) {
         return inj;
     }
+    fake.sonar_handler = true;
     return add_pending(false, trig, token);
+}
+
+static void f_release(void)
+{
+    record("release()");
+    fake.dht_rx = false;
+    fake.sonar_handler = false;
 }
 
 static esp_err_t f_init(const telemetrix_profile_t *p)
@@ -484,6 +516,9 @@ static esp_err_t f_init(const telemetrix_profile_t *p)
 static void f_deinit(void)
 {
     record("deinit()");
+    memset(fake.ow_rx, 0, sizeof(fake.ow_rx));
+    fake.dht_rx = false;
+    fake.sonar_handler = false;
 }
 
 const tmx_drv_t tmx_drv_fake = {
@@ -510,6 +545,7 @@ const tmx_drv_t tmx_drv_fake = {
     .ow_close = f_ow_close,
     .dht_start = f_dht_start,
     .sonar_start = f_sonar_start,
+    .release = f_release,
     .init = f_init,
     .deinit = f_deinit,
 };

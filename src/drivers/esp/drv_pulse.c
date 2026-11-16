@@ -393,6 +393,22 @@ void esp_pulse_init(void)
     atomic_store(&alive, true);
 }
 
+/* End of a session: callbacks stop touching the channel and the timers, nothing completes, each timer is stopped with a
+ * wait for a running callback (the timers are kept for the next session), then the DHT channel and the echo handler go.
+ * The pins are left to the caller, which puts them in their safe states next. */
+void esp_pulse_release(void)
+{
+    atomic_store(&alive, false);
+    atomic_fetch_and(&dht.m.state, ~1u);
+    atomic_fetch_and(&sonar.m.state, ~1u);
+    stop_blocking(dht.release);
+    stop_blocking(dht.m.timeout);
+    stop_blocking(sonar.m.timeout);
+    dht_free_channel();
+    sonar_detach();
+    atomic_store(&alive, true);
+}
+
 /* Callbacks stop touching channels and timers first, then each timer is stopped with a wait for a running callback. A
  * timer that will not stop is kept (leaked) rather than deleted under its callback. */
 static void drop_timer(esp_timer_handle_t *t)

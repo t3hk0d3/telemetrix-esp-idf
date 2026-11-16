@@ -110,7 +110,8 @@ esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, cons
 void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms);
 /** Run the scans that are due and return the milliseconds until the next deadline, UINT32_MAX when none. */
 uint32_t tmx_adapter_poll(tmx_adapter_t *a, uint32_t now_ms);
-/** Release every claim (LEDC first, then safe states), clear the tables, enable reporting, default analog interval. */
+/** Close the buses, forget the sensors, let the driver free its session resources (release), then release every claim
+ *  (LEDC first, then safe states), clear the tables, enable reporting, default analog interval. */
 void tmx_adapter_release(tmx_adapter_t *a);
 void tmx_adapter_counters(const tmx_adapter_t *a, uint32_t *ignored, uint32_t *refused);
 /** Fill out with the claimed pins in profile order (at most cap); returns how many were written. */

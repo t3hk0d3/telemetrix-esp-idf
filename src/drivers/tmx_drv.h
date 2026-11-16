@@ -9,7 +9,10 @@
 
 /** The hardware seen by the core and the adapter. src/drivers/esp/ implements it on chips, src/drivers/fake/ in tests.
  *  dht_start and sonar_start only start the measurement; the result arrives through tmx_completion_post with the token:
- *  five DHT frame bytes or an error, the sonar echo in microseconds or ESP_ERR_TIMEOUT. */
+ *  five DHT frame bytes or an error, the sonar echo in microseconds or ESP_ERR_TIMEOUT.
+ *  release ends a session (disconnect, RESET, stop): it frees what dht_start and sonar_start set up (the DHT RX channel,
+ *  the echo handler) and abandons a measurement in flight; buses close through their own ops. The adapter calls it
+ *  before the pins go back to their safe states. */
 typedef struct {
     esp_err_t (*gpio_input)(uint8_t gpio, bool pull_up, bool pull_down);
     esp_err_t (*gpio_output)(uint8_t gpio, bool level);
@@ -35,6 +38,7 @@ typedef struct {
     void (*ow_close)(uint8_t bus);
     esp_err_t (*dht_start)(uint8_t gpio, uint32_t token);
     esp_err_t (*sonar_start)(uint8_t trig, uint8_t echo, uint32_t token);
+    void (*release)(void);
     esp_err_t (*init)(const telemetrix_profile_t *p);
     void (*deinit)(void);
 } tmx_drv_t;

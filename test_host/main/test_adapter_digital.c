@@ -292,7 +292,7 @@ TEST_CASE("RESET: every claimed pin to its safe state, reports cleared, reset re
     FX_SEND0(TMX_CMD_STOP_ALL_REPORTS, 0);
     tmx_fake_reset();
     FX_SEND0(TMX_CMD_RESET, 5);
-    TEST_ASSERT_EQUAL_STRING("gpio_output(2,0)\ngpio_input(12,0,0)\n", tmx_fake_calls());
+    TEST_ASSERT_EQUAL_STRING("release()\ngpio_output(2,0)\ngpio_input(12,0,0)\n", tmx_fake_calls());
     TEST_ASSERT_EQUAL(TMX_USE_NONE, tmx_pin_use(&fx_a.claims, 2));
     telemetrix_pin_use_t uses[4];
     TEST_ASSERT_EQUAL(0, tmx_adapter_pin_uses(&fx_a, uses, 4));
