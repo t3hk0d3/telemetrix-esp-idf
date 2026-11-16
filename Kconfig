@@ -1,0 +1,27 @@
+menu "Telemetrix"
+
+    config TELEMETRIX_DHT
+        bool "DHT22 support"
+        default y
+
+    config TELEMETRIX_SONAR
+        bool "HC-SR04 sonar support"
+        default y
+
+    config TELEMETRIX_ONE_WIRE
+        bool "1-wire support"
+        default y
+
+    config TELEMETRIX_SERVO
+        bool "Servo support"
+        default y
+
+    config TELEMETRIX_I2C
+        bool "I2C support"
+        default y
+
+    config TELEMETRIX_ANALOG
+        bool "Analog input support"
+        default y
+
+endmenu

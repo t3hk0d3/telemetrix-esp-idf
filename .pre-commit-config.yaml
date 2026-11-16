@@ -1,0 +1,13 @@
+# Run with: uvx pre-commit run --all-files
+repos:
+  - repo: https://github.com/espressif/astyle_py.git
+    rev: v1.0.5
+    hooks:
+      - id: astyle_py
+        # Same astyle version as ESP-IDF v6.1; rules copied from its tools/ci/astyle-rules.yml.
+        args: ['--astyle-version=3.4.7', '--rules=astyle-rules.yml']
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.3
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
