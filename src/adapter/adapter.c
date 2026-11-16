@@ -197,10 +197,10 @@ static bool set_pin_mode(tmx_adapter_t *a, const uint8_t *p)
 static bool modify_reporting(tmx_adapter_t *a, uint8_t mode, uint8_t pin)
 {
     switch (mode) {
-    case 0: {
-        bool digital = tmx_digital_set_report(a, pin, false);
-        return tmx_analog_set_report(a, pin, false) || digital;
-    }
+    case 0:     /* upstream: every pin's reporting off, the pin byte ignored, the global flag untouched */
+        memset(a->digital.report, 0, sizeof(a->digital.report));
+        memset(a->analog.report, 0, sizeof(a->analog.report));
+        return true;
     case 1: return tmx_analog_set_report(a, pin, true);
     case 2: return tmx_digital_set_report(a, pin, true);
     case 3: return tmx_analog_set_report(a, pin, false);

@@ -197,14 +197,42 @@ TEST_CASE("MODIFY_REPORTING digital disable and enable: reports stop and resume"
     fx_assert_report(0, want, 4);
 }
 
-TEST_CASE("MODIFY_REPORTING mode 0 (disable all) for a pin: neither digital nor analog reports", "[adapter]")
+TEST_CASE("MODIFY_REPORTING mode 0: silences every digital and analog pin and ignores the pin byte", "[adapter]")
 {
     fx_start();
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 13, 0, 1);
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 34, 3, 0, 0, 1);
     FX_SEND(TMX_CMD_MODIFY_REPORTING, 0, 0, 12);
     tmx_adapter_poll(&fx_a, 50);
     TEST_ASSERT_EQUAL(0, fx_n_reports);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, tmx_adapter_poll(&fx_a, 50));
     TEST_ASSERT_EQUAL(0, fx_refused());
+}
+
+TEST_CASE("MODIFY_REPORTING mode 2 after mode 0: re-enables that digital pin only", "[adapter]")
+{
+    fx_start();
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 13, 0, 1);
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 34, 3, 0, 0, 1);
+    FX_SEND(TMX_CMD_MODIFY_REPORTING, 0, 0, 0);
+    FX_SEND(TMX_CMD_MODIFY_REPORTING, 0, 2, 13);
+    tmx_adapter_poll(&fx_a, 2);
+    tmx_adapter_poll(&fx_a, 19);
+    const uint8_t want[] = {3, 2, 13, 0};
+    TEST_ASSERT_EQUAL(1, fx_n_reports);
+    fx_assert_report(0, want, 4);
+}
+
+TEST_CASE("ENABLE_ALL_REPORTS after MODIFY_REPORTING mode 0: does not re-enable pins", "[adapter]")
+{
+    fx_start();
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
+    FX_SEND(TMX_CMD_MODIFY_REPORTING, 0, 0, 0);
+    FX_SEND0(TMX_CMD_ENABLE_ALL_REPORTS, 0);
+    tmx_adapter_poll(&fx_a, 50);
+    TEST_ASSERT_EQUAL(0, fx_n_reports);
 }
 
 TEST_CASE("MODIFY_REPORTING with a mode above 4, an unknown pin or the wrong kind of pin: refused_commands +1",
