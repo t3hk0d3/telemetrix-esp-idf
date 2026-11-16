@@ -297,8 +297,7 @@ static telemetrix_reason_t servo_command(tmx_adapter_t *a, uint8_t id, const uin
     }
 }
 
-/** A command of a feature switched off in Kconfig: ignored and counted like an id out of scope. */
-static bool switched_off(uint8_t id, const uint8_t *p)
+bool tmx_adapter_switched_off(uint8_t id, const uint8_t *p)
 {
     switch (id) {
     case TMX_CMD_SET_PIN_MODE: return p[1] == TMX_MODE_ANALOG && !ANALOG_ENABLED;
@@ -325,7 +324,7 @@ telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint
     default:
         break;
     }
-    if (switched_off(id, payload)) {
+    if (tmx_adapter_switched_off(id, payload)) {
         return TELEMETRIX_REASON_NOT_IN_SCOPE;
     }
     const uint8_t *p = payload;

@@ -162,6 +162,8 @@ bool tmx_adapter_reset_requested(tmx_adapter_t *a);
 /* adapter.c */
 /** The packet counters and upstream's refusal reports for a stock-mode refusal. */
 void tmx_adapter_stock_refusal(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, telemetrix_reason_t why);
+/** A command of a feature switched off in Kconfig: ignored and counted like an id out of scope (stock payload). */
+bool tmx_adapter_switched_off(uint8_t id, const uint8_t *p);
 /** Profile index of a GPIO, -1 when it is not a profile pin. */
 int tmx_adapter_pin_index(const tmx_adapter_t *a, uint8_t gpio);
 /** NONE when the pin exists, has the capability the use needs and is not held by a feature outside digital, analog,

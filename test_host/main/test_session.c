@@ -227,14 +227,14 @@ TEST_CASE("id 61 in stock mode: ignored and counted as in M1, no violation", "[s
     TEST_ASSERT_EQUAL(0, fx_n_reports);
 }
 
-TEST_CASE("ids 57-60 in extended mode: ERROR NOT_IN_SCOPE until their tasks land; in stock mode ignored",
+TEST_CASE("ids 59-60 in extended mode: ERROR NOT_IN_SCOPE until their tasks land; in stock mode ignored",
           "[session]")
 {
     start_ext();
     fx_a.session.abort = false;
-    FX_SEND(TMX_CMD_SYNC, 0, 0, 1, 1);
+    FX_SEND(TMX_CMD_GET_CAPABILITIES, 0, 0);
     FX_SEND(TMX_CMD_PLUGIN, 0, 0, 0);
-    const uint8_t e0[] = {ERR(0, TMX_CMD_SYNC, TELEMETRIX_REASON_NOT_IN_SCOPE)};
+    const uint8_t e0[] = {ERR(0, TMX_CMD_GET_CAPABILITIES, TELEMETRIX_REASON_NOT_IN_SCOPE)};
     const uint8_t e1[] = {ERR(1, TMX_CMD_PLUGIN, TELEMETRIX_REASON_NOT_IN_SCOPE)};
     fx_assert_report(0, e0, sizeof(e0));
     fx_assert_report(1, e1, sizeof(e1));

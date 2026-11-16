@@ -230,7 +230,8 @@ static void packet_cb(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
 {
     tmx_server_t *s = ctx;
     tmx_adapter_packet(&s->adapter, id, payload, len, s->now);
-    /* per packet, so commands after a RESET in the same chunk meet a fresh session and every RESET calls the hook */
+    /* per packet, so commands after a RESET in the same chunk meet freshly released hardware (the extended session and
+     * its numbering continue) and every RESET calls the hook */
     if (tmx_adapter_reset_requested(&s->adapter)) {
         tmx_completion_reset();         /* the adapter has released: stale completions must not meet the next session */
         if (s->hooks.reset) {
