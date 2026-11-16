@@ -2,7 +2,7 @@
 #include "sdkconfig.h"
 
 #if defined(CONFIG_TELEMETRIX_DHT) || defined(CONFIG_TELEMETRIX_SONAR) || defined(CONFIG_TELEMETRIX_ONE_WIRE) || \
-    defined(CONFIG_TELEMETRIX_SERVO) || defined(CONFIG_TELEMETRIX_I2C) || defined(CONFIG_TELEMETRIX_ANALOG)
+    defined(CONFIG_TELEMETRIX_SERVO) || defined(CONFIG_TELEMETRIX_I2C) || defined(CONFIG_TELEMETRIX_ANALOG) || defined(CONFIG_TELEMETRIX_EXTENDED)
 #error "this project must be built with every CONFIG_TELEMETRIX_* feature off (see sdkconfig.defaults)"
 #endif
 
@@ -108,4 +108,15 @@ TEST_CASE("Every feature off: LOOP and digital output still work", "[features_of
     TEST_ASSERT_EQUAL(0, fx_ignored());
     TEST_ASSERT_EQUAL(0, fx_refused());
     TEST_ASSERT_NOT_NULL(strstr(tmx_fake_calls(), "gpio_set(12,1)"));
+}
+
+TEST_CASE("Extended off: the handshake probe gets the stock answer and the session stays stock", "[features_off]")
+{
+    const uint8_t want[] = {4, TMX_RPT_FIRMWARE_REPORT, 3, 2, 100};
+    start();
+    FX_SEND(TMX_CMD_GET_FIRMWARE_VERSION, 0, TMX_EXT_MAGIC, 1, 0);
+    TEST_ASSERT_EQUAL(1, fx_n_reports);
+    fx_assert_report(0, want, sizeof(want));
+    TEST_ASSERT_FALSE(tmx_adapter_extended(&fx_a));
+    TEST_ASSERT_FALSE(tmx_adapter_mode_changed(&fx_a));
 }

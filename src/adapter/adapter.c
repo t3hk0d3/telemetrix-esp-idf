@@ -160,6 +160,7 @@ esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, cons
     a->emit = emit;
     a->ctx = ctx;
     a->on_bus = -1;
+    tmx_session_init(a);
     clear_tables(a);
     return tmx_claims_init(&a->claims, p, drv);
 }
@@ -394,9 +395,8 @@ telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint
     return why;
 }
 
-void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms)
+void tmx_adapter_stock_refusal(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, telemetrix_reason_t why)
 {
-    telemetrix_reason_t why = tmx_adapter_command(a, id, payload, len, now_ms);
     uint8_t out[TMX_REPORT_MAX];
     if (why == TELEMETRIX_REASON_NONE) {
         return;

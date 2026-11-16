@@ -254,7 +254,7 @@ static void drop_client(tmx_server_t *s, const char *why, bool abortive)
     s->client = -1;
     tmx_frame_abandon(&s->frame);
     s->dropped_before += s->frame.dropped;
-    tmx_adapter_release(&s->adapter);
+    tmx_adapter_session_end(&s->adapter);
     tmx_conn_reset(&s->conn);
     tmx_completion_reset();
     s->peer[0] = '\0';

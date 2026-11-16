@@ -118,6 +118,7 @@ typedef struct {
     size_t n_allowed;
     uint8_t task_priority;
     int8_t task_core;             /**< -1 = no affinity */
+    bool extended;                /**< offer the extended protocol to a client that asks for it (needs CONFIG_TELEMETRIX_EXTENDED) */
 } telemetrix_config_t;
 
 void telemetrix_config_default(telemetrix_config_t *out);

@@ -83,6 +83,18 @@ typedef struct {
     tmx_deadline_t dht_pass;    /**< next 2000 ms pass */
 } tmx_sensors_t;
 
+/** The extended-mode session of one client; all clear (stock mode) after tmx_adapter_session_end. */
+typedef struct {
+    bool extended;
+    uint8_t minor;              /**< extension protocol minor in force: the lower of client's and server's */
+    uint16_t seq;               /**< number of the next command; wraps at 65536 */
+    bool abort;                 /**< a refusal skips the commands up to the next SYNC; on at the start of a session */
+    bool skipping;              /**< a command was refused with abort on: skip until the next SYNC */
+    bool violation;             /**< a framing violation: the net layer closes the client; sticky until session end */
+    bool mode_changed;          /**< entered extended mode, not yet told to the net layer */
+    uint32_t error_reports;     /**< ERROR reports queued, over the adapter's life */
+} tmx_session_t;
+
 /** Fully defined so it can live on a stack or in static storage. */
 struct tmx_adapter {
     const telemetrix_profile_t *profile;
@@ -102,6 +114,7 @@ struct tmx_adapter {
     tmx_i2c_t i2c;
     tmx_onewire_t onewire;
     tmx_sensors_t sensors;
+    tmx_session_t session;
 };
 typedef struct tmx_adapter tmx_adapter_t;
 
@@ -114,15 +127,30 @@ esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, cons
  *  command that succeeded (LOOP, firmware, I2C data, 1-wire) are emitted; refusal reports and counters are not. */
 telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len,
                                         uint32_t now_ms);
-/** Handle one stock packet (the tmx_packet_fn target): tmx_adapter_command, then the counters (NOT_IN_SCOPE counts as
- *  ignored, any other refusal as refused) and upstream's refusal reports ([2,6,pin] for a servo attach with no
- *  servo available, [3,8,1,addr] for an I2C read nobody answered; those two are not counted as refused). */
+/** Handle one packet (the tmx_packet_fn target); the session entry.
+ *  Stock mode: GET_FIRMWARE_VERSION with exactly [0xA7, major, minor] gets the long answer (and a session with the
+ *  same major enters extended mode at the lower minor, when cfg.extended and CONFIG_TELEMETRIX_EXTENDED allow);
+ *  every other packet is tmx_adapter_command, then the counters (NOT_IN_SCOPE counts as ignored, any other refusal as
+ *  refused) and upstream's refusal reports ([2,6,pin] for a servo attach with no servo available, [3,8,1,addr] for an
+ *  I2C read nobody answered; those two are not counted as refused).
+ *  Extended mode: ids above 60 are a violation (nothing runs, nothing is queued); any other packet is numbered and,
+ *  unless a refusal earlier in the batch skips it, dispatched; a refusal is exactly one ERROR report queued as a
+ *  reply, counted in error_reports (and refused_commands, except NOT_IN_SCOPE). Ids 57-60 are NOT_IN_SCOPE until
+ *  their handlers land. */
 void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms);
 /** Run the scans that are due and return the milliseconds until the next deadline, UINT32_MAX when none. */
 uint32_t tmx_adapter_poll(tmx_adapter_t *a, uint32_t now_ms);
 /** Close the buses, forget the sensors, let the driver free its session resources (release), then release every claim
  *  (LEDC first, then safe states), clear the tables, enable reporting, default analog interval. */
 void tmx_adapter_release(tmx_adapter_t *a);
+/** release plus the session back to stock mode (seq 0, abort on, no violation): a client is gone. RESET uses
+ *  tmx_adapter_release only: a session stays extended. */
+void tmx_adapter_session_end(tmx_adapter_t *a);
+bool tmx_adapter_extended(const tmx_adapter_t *a);
+/** A framing violation was seen: sticky until tmx_adapter_session_end. */
+bool tmx_adapter_violation(const tmx_adapter_t *a);
+/** True once after the session entered extended mode, for the net layer's tmx_frame_set_mode. */
+bool tmx_adapter_mode_changed(tmx_adapter_t *a);
 void tmx_adapter_counters(const tmx_adapter_t *a, uint32_t *ignored, uint32_t *refused);
 /** Fill out with the claimed pins in profile order (at most cap); returns how many were written. */
 size_t tmx_adapter_pin_uses(const tmx_adapter_t *a, telemetrix_pin_use_t *out, size_t cap);
@@ -132,6 +160,8 @@ bool tmx_adapter_reset_requested(tmx_adapter_t *a);
 /* ---- Internal: shared by the adapter's source files, not part of the adapter's contract. ---- */
 
 /* adapter.c */
+/** The packet counters and upstream's refusal reports for a stock-mode refusal. */
+void tmx_adapter_stock_refusal(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, telemetrix_reason_t why);
 /** Profile index of a GPIO, -1 when it is not a profile pin. */
 int tmx_adapter_pin_index(const tmx_adapter_t *a, uint8_t gpio);
 /** NONE when the pin exists, has the capability the use needs and is not held by a feature outside digital, analog,
@@ -148,6 +178,10 @@ telemetrix_reason_t tmx_adapter_claim_reason(esp_err_t err);
 /** Forget the pin's digital, analog, PWM and servo state, stop its LEDC channel and return it to its safe state. */
 void tmx_adapter_retire(tmx_adapter_t *a, uint8_t gpio);
 void tmx_adapter_emit(tmx_adapter_t *a, const uint8_t *report, size_t n, bool reply, int8_t kind, uint16_t key);
+
+/* session.c */
+/** The state of a fresh adapter: stock mode, abort on. */
+void tmx_session_init(tmx_adapter_t *a);
 
 /* digital.c */
 telemetrix_reason_t tmx_digital_mode(tmx_adapter_t *a, uint8_t gpio, tmx_use_t use, bool report);

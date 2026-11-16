@@ -24,4 +24,8 @@ menu "Telemetrix"
         bool "Analog input support"
         default y
 
+    config TELEMETRIX_EXTENDED
+        bool "Extended protocol (numbered commands, error reports, discovery)"
+        default y
+
 endmenu
