@@ -40,6 +40,26 @@ static void got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 #define SMI_MDIO_GPIO 18
 #define PHY_ADDRESS 0
 
+static void eth_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    switch (id) {
+    case ETHERNET_EVENT_CONNECTED:
+        ESP_LOGI(TAG, "Ethernet link up");
+        break;
+    case ETHERNET_EVENT_DISCONNECTED:
+        ESP_LOGW(TAG, "Ethernet link down");
+        break;
+    case ETHERNET_EVENT_START:
+        ESP_LOGI(TAG, "Ethernet started, waiting for the link");
+        break;
+    case ETHERNET_EVENT_STOP:
+        ESP_LOGW(TAG, "Ethernet stopped");
+        break;
+    default:
+        break;
+    }
+}
+
 static esp_err_t network_up(void)
 {
     const gpio_config_t power = {.pin_bit_mask = 1ULL << PHY_POWER_GPIO, .mode = GPIO_MODE_OUTPUT};
@@ -71,6 +91,7 @@ static esp_err_t network_up(void)
     esp_netif_t *netif = esp_netif_new(&(esp_netif_config_t)ESP_NETIF_DEFAULT_ETH());
     ESP_RETURN_ON_FALSE(netif, ESP_FAIL, TAG, "netif");
     ESP_RETURN_ON_ERROR(esp_netif_attach(netif, esp_eth_new_netif_glue(eth)), TAG, "netif attach");
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, eth_event, NULL), TAG, "handler");
     ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, got_ip, NULL), TAG, "handler");
     return esp_eth_start(eth);
 }
@@ -79,6 +100,14 @@ static esp_err_t network_up(void)
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
+    if (id == WIFI_EVENT_STA_DISCONNECTED) {
+        /* the reason code (wifi_err_reason_t) tells a wrong password, a missing AP or a weak signal apart */
+        const wifi_event_sta_disconnected_t *event = data;
+        ESP_LOGW(TAG, "disconnected from \"%s\", reason %u, rssi %d", CONFIG_EXAMPLE_WIFI_SSID, event->reason,
+                 event->rssi);
+    } else if (id == WIFI_EVENT_STA_CONNECTED) {
+        ESP_LOGI(TAG, "associated with \"%s\"", CONFIG_EXAMPLE_WIFI_SSID);
+    }
     if (id == WIFI_EVENT_STA_START || id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGI(TAG, "connecting to \"%s\"", CONFIG_EXAMPLE_WIFI_SSID);
         esp_wifi_connect();

@@ -27,6 +27,14 @@ static void got_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
+    if (id == WIFI_EVENT_STA_DISCONNECTED) {
+        /* the reason code (wifi_err_reason_t) tells a wrong password, a missing AP or a weak signal apart */
+        const wifi_event_sta_disconnected_t *event = data;
+        ESP_LOGW(TAG, "disconnected from \"%s\", reason %u, rssi %d", CONFIG_EXAMPLE_WIFI_SSID, event->reason,
+                 event->rssi);
+    } else if (id == WIFI_EVENT_STA_CONNECTED) {
+        ESP_LOGI(TAG, "associated with \"%s\"", CONFIG_EXAMPLE_WIFI_SSID);
+    }
     if (id == WIFI_EVENT_STA_START || id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGI(TAG, "connecting to \"%s\"", CONFIG_EXAMPLE_WIFI_SSID);
         esp_wifi_connect();
