@@ -240,8 +240,13 @@ tools/.venv/bin/python tools/compat/compat_test.py --compare upstream.log ours.l
 ```
 
 Run the script once against upstream Telemetrix4Esp32 (`--log upstream.log`) and once against this firmware. Wire
-GPIO32 (output) to GPIO33 (input) on the Olimex example. `--i2c-addr`, `--dht PIN`, `--sonar TRIG,ECHO` and
+GPIO32 (output) to GPIO33 (input) on the Olimex example (the default `--loopback 32,33`). `--i2c-addr`, `--dht PIN`, `--sonar TRIG,ECHO` and
 `--onewire PIN` add the devices you have. `--strict` fails when the board sends a report id or length the stock client
-does not dispatch (the client silently ignores those). `--compare` normalises analog, sonar and DHT values,
-timestamps and the firmware build byte (3.2.0 against 3.2.100) and prints any remaining difference with context.
+does not dispatch (the client silently ignores those). `--compare` normalises timestamps and the firmware build byte
+(3.2.0 against 3.2.100); reduces digital reports, per pin, to the sequence of distinct consecutive values (so an initial
+or repeated report that one board sends and the other does not is not a difference); and takes the periodic analog,
+sonar and DHT reports out of the sequence, comparing only which (kind, pin, data or error) appeared. Everything else is
+byte for byte, and any difference is printed with context (exit 1). A log with no server packets also fails.
+Because periodic reports are not compared byte for byte, `--strict` is what catches a malformed one (and a connection
+that ends inside a packet).
 `recording_proxy.py --listen PORT --target HOST:PORT --log FILE [--strict]` runs the proxy alone.

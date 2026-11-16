@@ -42,7 +42,11 @@ def check_one_wire(payload):
 
 def fixed(payload_len):
     def check(payload):
-        return None if len(payload) == payload_len else f"payload is {len(payload)} bytes, expected {payload_len}"
+        return (
+            None
+            if len(payload) == payload_len
+            else f"payload is {len(payload)} bytes, expected {payload_len}"
+        )
 
     return check
 

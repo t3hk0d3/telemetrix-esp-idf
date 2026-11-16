@@ -6,6 +6,7 @@ Bytes are forwarded unchanged in both directions as they arrive. A copy is frame
 `[len][id][payload]` (`len` counts the id and the payload) and written as one JSON line per packet:
 
     {"dir": "c2s"|"s2c", "t": seconds since the proxy started, "len": length byte, "id": id or null, "bytes": payload hex}
+(plus "partial": true for the unfinished packet left when a connection ends)
 
 A packet with `len` 0 has no id (`id` null, no bytes). With --strict the exit status is 1 when a server-to-client
 packet has an id the stock client does not dispatch or a length that id does not allow (known_reports.py), or when the
@@ -24,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import known_reports  # noqa: E402
+import known_reports
 
 C2S = "c2s"
 S2C = "s2c"
@@ -110,30 +111,46 @@ class RecordingProxy:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.conns.append((client, server))
             for src, dst, direction in ((client, server, C2S), (server, client, S2C)):
-                thread = threading.Thread(target=self._pump, args=(src, dst, direction), daemon=True)
+                thread = threading.Thread(
+                    target=self._pump, args=(src, dst, direction), daemon=True
+                )
                 self.threads.append(thread)
                 thread.start()
 
     def _pump(self, src, dst, direction):
         framer = Framer()
         try:
-            while True:
-                data = src.recv(CHUNK)
-                if not data:
-                    break
-                dst.sendall(data)
-                for length, report_id, payload in framer.feed(data):
-                    self._record(direction, length, report_id, payload)
+            self._pump_loop(src, dst, direction, framer)
         except OSError:
+            self._record_partial(direction, framer)
             _close(src)
             _close(dst)  # a reset on one side is a reset on the other
             return
+        self._record_partial(direction, framer)
         try:
-            dst.shutdown(socket.SHUT_WR)  # pass the end of stream on, keep the other direction open
+            dst.shutdown(
+                socket.SHUT_WR
+            )  # pass the end of stream on, keep the other direction open
         except OSError:
             pass
 
-    def _record(self, direction, length, report_id, payload):
+    def _pump_loop(self, src, dst, direction, framer):
+        while True:
+            data = src.recv(CHUNK)
+            if not data:
+                return
+            dst.sendall(data)
+            for length, report_id, payload in framer.feed(data):
+                self._record(direction, length, report_id, payload)
+
+    def _record_partial(self, direction, framer):
+        """Bytes of an unfinished packet left when the connection ended: recorded, and a strict violation."""
+        if not framer.buf:
+            return
+        self._record(direction, framer.buf[0], framer.buf[1] if len(framer.buf) > 1 else None,
+                     bytes(framer.buf[2:]), partial=True)  # fmt: skip
+
+    def _record(self, direction, length, report_id, payload, partial=False):
         entry = {
             "dir": direction,
             "t": round(time.monotonic() - self.start_time, 6),
@@ -141,15 +158,25 @@ class RecordingProxy:
             "id": report_id,
             "bytes": payload.hex(),
         }
+        if partial:
+            entry["partial"] = True
         with self.log_lock:
             if not self.log.closed:
                 self.log.write(json.dumps(entry) + "\n")
             if direction == S2C and self.strict:
-                reason = "length 0 (the stock client raises on it)" if report_id is None else None
-                if report_id is not None:
+                if partial:
+                    reason = "connection ended inside a packet"
+                elif report_id is None:
+                    reason = "length 0 (the stock client raises on it)"
+                else:
                     reason = known_reports.check_report(report_id, payload)
                 if reason:
-                    line = f"strict: {reason}: {length:02x}{(bytes([report_id]) + payload).hex()}"
+                    raw = (
+                        bytes([length])
+                        + (b"" if report_id is None else bytes([report_id]))
+                        + payload
+                    )
+                    line = f"strict: {reason}: {raw.hex()}"
                     self.violations.append(line)
                     sys.stderr.write(line + "\n")
 
@@ -175,13 +202,21 @@ def parse_target(text):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--listen", type=int, required=True, metavar="PORT")
-    parser.add_argument("--target", type=parse_target, required=True, metavar="HOST:PORT")
+    parser.add_argument(
+        "--target", type=parse_target, required=True, metavar="HOST:PORT"
+    )
     parser.add_argument("--log", required=True, metavar="FILE")
-    parser.add_argument("--strict", action="store_true", help="exit 1 on a server report the stock client does not know")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 on a server report the stock client does not know",
+    )
     parser.add_argument("--bind", default="127.0.0.1", metavar="ADDRESS")
     args = parser.parse_args(argv)
 
-    proxy = RecordingProxy(args.listen, args.target, args.log, args.strict, args.bind).start()
+    proxy = RecordingProxy(
+        args.listen, args.target, args.log, args.strict, args.bind
+    ).start()
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
