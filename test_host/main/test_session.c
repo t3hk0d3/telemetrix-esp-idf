@@ -227,14 +227,14 @@ TEST_CASE("id 61 in stock mode: ignored and counted as in M1, no violation", "[s
     TEST_ASSERT_EQUAL(0, fx_n_reports);
 }
 
-TEST_CASE("ids 59-60 in extended mode: ERROR NOT_IN_SCOPE until 59 lands, 60 with no plugin NO_SUCH_SLOT; in stock "
+TEST_CASE("ids 59-60 in extended mode: 59 with no page byte BAD_ARGUMENT, 60 with no plugin NO_SUCH_SLOT; in stock "
           "mode ignored", "[session]")
 {
     start_ext();
     fx_a.session.abort = false;
-    FX_SEND(TMX_CMD_GET_CAPABILITIES, 0, 0);
+    FX_SEND0(TMX_CMD_GET_CAPABILITIES, 0);
     FX_SEND(TMX_CMD_PLUGIN, 0, 0, 0);
-    const uint8_t e0[] = {ERR(0, TMX_CMD_GET_CAPABILITIES, TELEMETRIX_REASON_NOT_IN_SCOPE)};
+    const uint8_t e0[] = {ERR(0, TMX_CMD_GET_CAPABILITIES, TELEMETRIX_REASON_BAD_ARGUMENT)};
     const uint8_t e1[] = {7, TMX_RPT_ERROR, 0, 1, TMX_CMD_PLUGIN, TELEMETRIX_REASON_NO_SUCH_SLOT, 0, 0};    /* + [slot, sub] */
     fx_assert_report(0, e0, sizeof(e0));
     fx_assert_report(1, e1, sizeof(e1));

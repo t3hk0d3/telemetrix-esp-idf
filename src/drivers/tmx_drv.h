@@ -44,6 +44,9 @@ typedef struct {
     void (*release)(void);
     /** A free-running microsecond clock (plugin time budget). */
     uint64_t (*micros)(void);
+    /** The chip for the CHIP record: model (esp_chip_model_t), revision (major x 100 + minor) and the IDF version
+     *  string, truncated to idf_cap - 1 bytes and NUL-terminated. */
+    void (*chip_info)(uint16_t *model, uint16_t *revision, char *idf, size_t idf_cap);
     esp_err_t (*init)(const telemetrix_profile_t *p);
     void (*deinit)(void);
 } tmx_drv_t;

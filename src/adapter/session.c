@@ -170,7 +170,7 @@ static telemetrix_reason_t extended_command(tmx_adapter_t *a, uint16_t seq, uint
     case TMX_CMD_PLUGIN:
         return tmx_adapter_plugin_command(a, payload, len, code);
     case TMX_CMD_GET_CAPABILITIES:
-        return TELEMETRIX_REASON_NOT_IN_SCOPE;      /* placeholder: the handler of 59 replaces this */
+        return tmx_discovery_command(a, payload, len);
     default:
         return tmx_adapter_command(a, id, payload, len, now_ms);
     }

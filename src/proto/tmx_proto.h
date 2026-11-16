@@ -192,4 +192,56 @@ size_t tmx_rpt_bus_wrap(uint8_t *out, uint8_t bus, const uint8_t *stock_report, 
 /** [len,61,slot,sub,data...]; returns 0 when n is above 251. */
 size_t tmx_rpt_plugin(uint8_t *out, uint8_t slot, uint8_t sub, const uint8_t *data, size_t n);
 
+/* ---- CAPABILITIES records and pages (caps.c) ---- */
+
+/** Record types. A record is [type][len][value], len counting the value only. */
+#define TMX_CAPS_CHIP 1
+#define TMX_CAPS_PIN 2
+#define TMX_CAPS_BUS 3
+#define TMX_CAPS_LIMIT 4
+#define TMX_CAPS_PLUGIN 5
+#define TMX_CAPS_NAMED 6
+
+/** BUS record kinds and LIMIT kinds. */
+#define TMX_CAPS_BUS_I2C 0
+#define TMX_CAPS_BUS_ONEWIRE 1
+#define TMX_CAPS_LIMIT_SERVOS 1
+#define TMX_CAPS_LIMIT_PWM_CHANNELS 2
+#define TMX_CAPS_LIMIT_PWM_TIMERS 3
+#define TMX_CAPS_LIMIT_DHT 4
+#define TMX_CAPS_LIMIT_SONAR 5
+#define TMX_CAPS_LIMIT_ANALOG_FLOOR_MS 6
+
+/** Record bytes one CAPABILITIES page carries: the report is [len,60,page,last_page,records...], at most 255 bytes. */
+#define TMX_CAPS_PAGE_MAX 251
+/** The most a record can hold, [type][len] included: a record never spans pages (strings are cut to fit). */
+#define TMX_CAPS_RECORD_MAX TMX_CAPS_PAGE_MAX
+
+/* Each encoder writes one record into out (TMX_CAPS_RECORD_MAX bytes) and returns its length. Multi-byte values are
+ * big-endian and signed bytes two's complement. Strings are ASCII, not NUL-terminated, and cut when the record would
+ * not fit in a page. */
+
+/** [model u16][revision u16][idf ASCII] */
+size_t tmx_caps_chip(uint8_t *out, uint16_t model, uint16_t revision, const char *idf);
+/** [gpio][caps u16][safe][adc_unit i8][adc_channel i8][named cap ids...] */
+size_t tmx_caps_pin(uint8_t *out, uint8_t gpio, uint16_t caps, uint8_t safe, int8_t adc_unit, int8_t adc_channel,
+                    const uint8_t *named_ids, size_t n_named);
+/** [0][bus][sda i8][scl i8][speed_hz u32] */
+size_t tmx_caps_bus_i2c(uint8_t *out, uint8_t bus, int8_t sda, int8_t scl, uint32_t speed_hz);
+/** [1][bus][gpio i8] */
+size_t tmx_caps_bus_onewire(uint8_t *out, uint8_t bus, int8_t gpio);
+/** [kind][count u16] */
+size_t tmx_caps_limit(uint8_t *out, uint8_t kind, uint16_t count);
+/** [slot][major][minor][name ASCII] */
+size_t tmx_caps_plugin(uint8_t *out, uint8_t slot, uint8_t major, uint8_t minor, const char *name);
+/** [id][name ASCII] */
+size_t tmx_caps_named(uint8_t *out, uint8_t id, const char *name);
+
+/** Yields record i into rec (TMX_CAPS_RECORD_MAX bytes) and returns its length, 0 after the last. */
+typedef size_t (*tmx_caps_source_fn)(size_t i, uint8_t *rec, void *ctx);
+/** Write the whole CAPABILITIES report [len,60,page,last_page,records...] of a page into out (TMX_EXT_REPORT_MAX bytes)
+ *  and its length into *n. Records are packed in order, never split, at most TMX_CAPS_PAGE_MAX bytes a page. The pages
+ *  are found by walking the source from record 0 on every call. False when page is past the last one. */
+bool tmx_caps_page(tmx_caps_source_fn src, void *ctx, uint8_t page, uint8_t *out, size_t *n);
+
 #endif

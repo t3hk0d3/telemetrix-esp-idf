@@ -31,7 +31,7 @@ static const telemetrix_adc_grant_t fx_adc[] = {{.unit = 1, .handle = &fx_adc_ha
 #define FX_MAX_REPORTS 32
 
 typedef struct {
-    uint8_t data[TMX_REPORT_MAX + 2];   /* room for a BUS_REPORT wrap */
+    uint8_t data[TMX_EXT_REPORT_MAX];   /* room for an extended report */
     size_t n;
     bool reply;
     int8_t kind;

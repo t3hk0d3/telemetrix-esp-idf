@@ -1,3 +1,8 @@
+#include <stdio.h>
+
+#include "esp_chip_info.h"
+#include "esp_idf_version.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 
 #include "tmx_drv_esp.h"
@@ -7,6 +12,15 @@
 static uint64_t n_micros(void)
 {
     return (uint64_t)esp_timer_get_time();
+}
+
+static void n_chip_info(uint16_t *model, uint16_t *revision, char *idf, size_t idf_cap)
+{
+    esp_chip_info_t info;
+    esp_chip_info(&info);
+    *model = (uint16_t)info.model;
+    *revision = info.revision;      /* IDF already counts major x 100 + minor */
+    snprintf(idf, idf_cap, "%s", esp_get_idf_version());
 }
 
 static esp_err_t n_init(const telemetrix_profile_t *p)
@@ -52,6 +66,7 @@ const tmx_drv_t tmx_drv_esp = {
     .sonar_start = esp_sonar_start,
     .release = esp_pulse_release,
     .micros = n_micros,
+    .chip_info = n_chip_info,
     .init = n_init,
     .deinit = n_deinit,
 };

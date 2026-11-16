@@ -139,7 +139,7 @@ telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint
  *  Extended mode: ids above 60 are a violation (nothing runs, nothing is queued); any other packet is numbered and,
  *  unless a refusal earlier in the batch skips it, dispatched; a refusal is exactly one ERROR report queued as a
  *  reply, counted in error_reports (and refused_commands, except NOT_IN_SCOPE). PLUGIN (60) goes to the plugin in its
- *  slot, whose PLUGIN refusal adds its code to the ERROR; id 59 is NOT_IN_SCOPE until its handler lands. */
+ *  slot, whose PLUGIN refusal adds its code to the ERROR; GET_CAPABILITIES (59) is tmx_discovery_command. */
 void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms);
 /** Run the scans that are due and, during an extended session, the plugin poll hooks that are due or woken (timed
  *  against cfg.plugin_budget_us); return the milliseconds until the next deadline, UINT32_MAX when none. */
@@ -231,6 +231,15 @@ void tmx_i2c_release(tmx_adapter_t *a);
 telemetrix_reason_t tmx_onewire_command(tmx_adapter_t *a, uint8_t bus, uint8_t id, const uint8_t *p, size_t len);
 /** Close every open bus. */
 void tmx_onewire_release(tmx_adapter_t *a);
+
+/* discovery.c */
+/** The IDF version string of the CHIP record is cut to this many bytes. */
+#define TMX_IDF_VERSION_MAX 32
+/** Record i of the capabilities (CHIP, NAMED_CAP, PIN, BUS, LIMIT, PLUGIN in that order), 0 length after the last;
+ *  adapter is a tmx_adapter_t *. The source for tmx_caps_page. */
+size_t tmx_discovery_record(size_t i, uint8_t *rec, void *adapter);
+/** GET_CAPABILITIES [page]: emit the page as a reply. BAD_ARGUMENT without a page byte or past the last page. */
+telemetrix_reason_t tmx_discovery_command(tmx_adapter_t *a, const uint8_t *payload, size_t len);
 
 /* plugin_api.c */
 /** PLUGIN [slot, sub, args...]: the plugin's command, timed and counted. BAD_ARGUMENT under 2 bytes, NO_SUCH_SLOT for

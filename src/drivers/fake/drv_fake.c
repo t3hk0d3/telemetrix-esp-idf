@@ -527,6 +527,13 @@ void tmx_fake_set_micros_step(uint32_t us)
     pthread_mutex_unlock(&fake_lock);
 }
 
+static void f_chip_info(uint16_t *model, uint16_t *revision, char *idf, size_t idf_cap)
+{
+    *model = 0xFFFF;
+    *revision = 0;
+    snprintf(idf, idf_cap, "linux");
+}
+
 static esp_err_t f_init(const telemetrix_profile_t *p)
 {
     (void)p;
@@ -572,6 +579,7 @@ const tmx_drv_t tmx_drv_fake = {
     .sonar_start = f_sonar_start,
     .release = f_release,
     .micros = f_micros,
+    .chip_info = f_chip_info,
     .init = f_init,
     .deinit = f_deinit,
 };
