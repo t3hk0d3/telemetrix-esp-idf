@@ -15,3 +15,6 @@
   `CONFIG_TELEMETRIX_EXTENDED`, status counters, an extended fuzz target, and the asyncio client `telemetrix_idf` in
   `client/` (chains, events, stock-mode fallback, plugin halves with request ids). Plus `tools/hostile/hostile_client.py`,
   a flood/garbage/stall/storm script for the host server and boards.
+- `telemetrix_config_t.task_stack_bytes` (default 6144, at least 4096): the network task's stack, on which plugin hooks
+  run. Applications must start from `telemetrix_config_default`: a configuration built from zeroes now gets `extended`
+  false, `plugin_budget_us` 0 and `task_stack_bytes` 0, which `telemetrix_start` refuses.

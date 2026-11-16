@@ -10,7 +10,9 @@ a fresh connection must still get the handshake answer and a LOOP reply; otherwi
 server's default is 10 s (start the host server with --stall-ms to shorten it). `stall` needs Linux: it reads the
 socket's TCP state from TCP_INFO, because a client that does not read cannot see the peer's close through recv (a
 peek returns the buffered reports, not EOF) and a send may keep succeeding into the buffer. Without TCP_INFO (macOS,
-Windows) the mode exits 1 with "stall mode needs Linux TCP_INFO"; the other modes run anywhere.
+Windows) the mode exits 1 with "stall mode needs Linux TCP_INFO". The other modes run anywhere, but `--mode all` runs
+the modes in order and stops at the first failure, so off Linux it runs flood, garbage and ext-garbage, then exits 1 at
+stall and never runs storm: run `--mode storm` on its own there.
 
 WARNING: garbage and ext-garbage send arbitrary commands and may drive pins of the target board.
 """

@@ -86,7 +86,9 @@ The stock client's `set_pin_mode_i2c()` always sends a bare `I2C_BEGIN`, so a pr
 (or shared) pins; the examples do (Olimex ESP32-POE: SDA GPIO13, SCL GPIO16 on UEXT; S3 DevKitC: 13, 14; C6 DevKitC:
 23, 22).
 
-**Settings** (`telemetrix_config_default` fills every field; `telemetrix_config_t`):
+**Settings** (`telemetrix_config_default` fills every field; `telemetrix_config_t`). Always start from
+`telemetrix_config_default` and change what you need: a configuration built from zeroes gets `extended` false,
+`plugin_budget_us` 0 and `task_stack_bytes` 0, and `telemetrix_start` refuses the last with `ESP_ERR_INVALID_ARG`.
 
 | Field | Default |
 |---|---|
@@ -100,11 +102,10 @@ The stock client's `set_pin_mode_i2c()` always sends a bare `I2C_BEGIN`, so a pr
 | `max_dht`, `max_sonar`, `max_servo` | 6, 6, 4 (servos never more than the free LEDC channels) |
 | `allowed`, `n_allowed` | empty = any peer (`telemetrix_cidr_parse` builds entries) |
 | `task_priority`, `task_core` | 5, -1 (no affinity) |
+| `task_stack_bytes` | 6144, the network task's stack; at least 4096 (`TELEMETRIX_TASK_STACK_MIN`), else `telemetrix_start` returns `ESP_ERR_INVALID_ARG`. Plugin hooks run on it |
 | `extended` | true: offer the extended protocol (false = serve every client stock) |
 | `plugin_budget_us` | 5000 |
 | `plugins`, `n_plugins` | none (see the extended protocol) |
-
-The network task's stack is 6144 bytes (internal constant).
 
 **Hooks** (`telemetrix_hooks_t`, all optional): `access(peer, ctx)` (NULL = allow), `reset(ctx)` (called after a RESET
 has released everything), `connected(peer, ctx)`, `disconnected(ctx)`.
@@ -297,7 +298,13 @@ it with `PLUGIN [slot, sub, args...]`, and the plugin answers with PLUGIN_REPORT
 - `telemetrix_start` returns `ESP_ERR_INVALID_ARG` for a pin naming a capability no registered plugin declares, a bad
   or duplicate plugin name, or too many plugins or names; `ESP_ERR_NOT_SUPPORTED` for plugins with
   `CONFIG_TELEMETRIX_EXTENDED` off.
-- Every call into a plugin (command, poll, release) runs on the network task. Command and poll calls are timed against
+- Every call into a plugin (command, poll, release) runs on the network task, on its stack of
+  `config.task_stack_bytes` (default 6144). `ESP_LOGx` alone can take 1.5-2.5 KB of stack on Xtensa; the free stack
+  left at the plugin call is unmeasured (to be measured in the board pass), so raise `task_stack_bytes` for plugins with
+  deep calls or large locals.
+- A command handler returns NONE, or a refusal reason from `NO_SUCH_PIN` to `NO_SUCH_SLOT` (with its own code for
+  `PLUGIN`). `SKIPPED` (the server's own) and values outside the reasons are sent as `PLUGIN` with code 0.
+- Command and poll calls are timed against
   `config.plugin_budget_us` (default 5000 us); an overrun is counted (`overruns`, `max_us`), never aborted, and the
   network task waits for it, so a slow plugin delays every client report.
 - `poll` runs only during an extended session: at once, then when the milliseconds it returned are up or after
@@ -406,7 +413,9 @@ while the socket is backed up a fast pulse (0, 1, 0) on a digital input can reac
   hostile client (standard library only). After each mode a fresh connection must still get the handshake answer and a
   LOOP reply. It runs in `make test-integration` against the host server (which also checks that no file descriptor
   leaks) and can be pointed at a board; the stall drop takes the server's `send_stall_ms` (10 s by default). `stall` needs Linux (it
-  reads the TCP state from `TCP_INFO`; elsewhere it exits 1 with "stall mode needs Linux TCP_INFO"). Warning: `garbage`
+  reads the TCP state from `TCP_INFO`; elsewhere it exits 1 with "stall mode needs Linux TCP_INFO"). `--mode all` stops at
+  the first failing mode, so off Linux it runs flood, garbage and ext-garbage, exits 1 at stall and never reaches storm
+  (run `--mode storm` on its own there). Warning: `garbage`
   and `ext-garbage` send arbitrary commands and may drive pins of the target board.
 - `make client-test` and `make client-integration`: the Python client's unit tests and its tests against the host server.
 - `make build-examples`: build every board example.
