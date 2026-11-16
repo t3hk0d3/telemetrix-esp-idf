@@ -6,15 +6,23 @@
 #define ALL_DIGITAL (TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_DOUT | TELEMETRIX_CAP_PULL_UP | TELEMETRIX_CAP_PULL_DOWN)
 
 static const telemetrix_pin_t pins[] = {
-    {.gpio = 2, .caps = ALL_DIGITAL | TELEMETRIX_CAP_PWM, .safe = TELEMETRIX_SAFE_DRIVE_LOW, .adc_unit = -1,
-     .adc_channel = -1},
+    {
+        .gpio = 2, .caps = ALL_DIGITAL | TELEMETRIX_CAP_PWM, .safe = TELEMETRIX_SAFE_DRIVE_LOW, .adc_unit = -1,
+        .adc_channel = -1
+    },
     {.gpio = 4, .caps = ALL_DIGITAL, .safe = TELEMETRIX_SAFE_PULL_UP, .adc_unit = -1, .adc_channel = -1},
-    {.gpio = 5, .caps = TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_ADC, .safe = TELEMETRIX_SAFE_FLOAT, .adc_unit = 1,
-     .adc_channel = 4},
-    {.gpio = 21, .caps = ALL_DIGITAL | TELEMETRIX_CAP_I2C, .safe = TELEMETRIX_SAFE_FLOAT, .adc_unit = -1,
-     .adc_channel = -1},
-    {.gpio = 22, .caps = ALL_DIGITAL | TELEMETRIX_CAP_I2C | TELEMETRIX_CAP_ONE_WIRE, .safe = TELEMETRIX_SAFE_FLOAT,
-     .adc_unit = -1, .adc_channel = -1},
+    {
+        .gpio = 5, .caps = TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_ADC, .safe = TELEMETRIX_SAFE_FLOAT, .adc_unit = 1,
+        .adc_channel = 4
+    },
+    {
+        .gpio = 21, .caps = ALL_DIGITAL | TELEMETRIX_CAP_I2C, .safe = TELEMETRIX_SAFE_FLOAT, .adc_unit = -1,
+        .adc_channel = -1
+    },
+    {
+        .gpio = 22, .caps = ALL_DIGITAL | TELEMETRIX_CAP_I2C | TELEMETRIX_CAP_ONE_WIRE, .safe = TELEMETRIX_SAFE_FLOAT,
+        .adc_unit = -1, .adc_channel = -1
+    },
 };
 static const telemetrix_adc_grant_t adc[] = {{.unit = 1, .handle = NULL}};
 static const telemetrix_i2c_bus_t i2c[] = {{.bus = 0, .port = 0, .sda = 21, .scl = 22, .speed_hz = 100000}};
@@ -50,8 +58,10 @@ TEST_CASE("On more than 64 pins: ESP_ERR_INVALID_ARG", "[profile]")
 {
     static telemetrix_pin_t many[65];
     for (int i = 0; i < 65; i++) {
-        many[i] = (telemetrix_pin_t){.gpio = (uint8_t)i, .caps = TELEMETRIX_CAP_DIN, .adc_unit = -1,
-                                     .adc_channel = -1};
+        many[i] = (telemetrix_pin_t) {
+            .gpio = (uint8_t)i, .caps = TELEMETRIX_CAP_DIN, .adc_unit = -1,
+            .adc_channel = -1
+        };
     }
     telemetrix_profile_t p = {.pins = many, .n_pins = 65};
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
@@ -139,7 +149,9 @@ TEST_CASE("On an LEDC grant with no channel or no timer while a pin has the PWM 
     p.ledc.channel_mask = 0;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate(&p));
     p = valid();
-    p = (telemetrix_profile_t){.pins = pins + 1, .n_pins = 1};
+    p = (telemetrix_profile_t) {
+        .pins = pins + 1, .n_pins = 1
+    };
     TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate(&p));
 }
 

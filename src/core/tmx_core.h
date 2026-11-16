@@ -66,7 +66,7 @@ void tmx_release_ledc(tmx_claims_t *c, uint8_t channel);
 /** Count an RMT RX channel against the grant. ESP_ERR_NOT_FOUND when none is left. */
 esp_err_t tmx_claim_rmt_rx(tmx_claims_t *c);
 void tmx_release_rmt_rx(tmx_claims_t *c);
-/** Safe state for every claimed pin in profile order, stop every LEDC channel and free every timer, forget RMT claims.
+/** Stop every LEDC channel and free every timer, then safe state for every claimed pin in profile order, forget RMT claims.
  *  Never closes buses: that is the adapter's job. */
 void tmx_claims_release_all(tmx_claims_t *c);
 

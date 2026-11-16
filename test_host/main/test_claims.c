@@ -7,19 +7,28 @@
 #define ALL_DIGITAL (TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_DOUT | TELEMETRIX_CAP_PULL_UP | TELEMETRIX_CAP_PULL_DOWN)
 
 static const telemetrix_pin_t pins[] = {
-    {.gpio = 2, .caps = ALL_DIGITAL | TELEMETRIX_CAP_PWM, .safe = TELEMETRIX_SAFE_DRIVE_LOW, .adc_unit = -1,
-     .adc_channel = -1},
+    {
+        .gpio = 2, .caps = ALL_DIGITAL | TELEMETRIX_CAP_PWM, .safe = TELEMETRIX_SAFE_DRIVE_LOW, .adc_unit = -1,
+        .adc_channel = -1
+    },
     {.gpio = 4, .caps = ALL_DIGITAL, .safe = TELEMETRIX_SAFE_PULL_UP, .adc_unit = -1, .adc_channel = -1},
-    {.gpio = 5, .caps = TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_ADC, .safe = TELEMETRIX_SAFE_PULL_DOWN, .adc_unit = 1,
-     .adc_channel = 4},
-    {.gpio = 21, .caps = ALL_DIGITAL | TELEMETRIX_CAP_I2C, .safe = TELEMETRIX_SAFE_DRIVE_HIGH, .adc_unit = -1,
-     .adc_channel = -1},
+    {
+        .gpio = 5, .caps = TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_ADC, .safe = TELEMETRIX_SAFE_PULL_DOWN, .adc_unit = 1,
+        .adc_channel = 4
+    },
+    {
+        .gpio = 21, .caps = ALL_DIGITAL | TELEMETRIX_CAP_I2C, .safe = TELEMETRIX_SAFE_DRIVE_HIGH, .adc_unit = -1,
+        .adc_channel = -1
+    },
     {.gpio = 22, .caps = TELEMETRIX_CAP_DIN, .safe = TELEMETRIX_SAFE_FLOAT, .adc_unit = -1, .adc_channel = -1},
 };
 static int shared_i2c_handle, shared_adc_handle;
 static const telemetrix_adc_grant_t adc[] = {{.unit = 1, .handle = &shared_adc_handle}};
-static const telemetrix_i2c_bus_t i2c[] = {{.bus = 0, .port = 0, .sda = 21, .scl = -1, .speed_hz = 100000,
-                                            .handle = &shared_i2c_handle}};
+static const telemetrix_i2c_bus_t i2c[] = {{
+        .bus = 0, .port = 0, .sda = 21, .scl = -1, .speed_hz = 100000,
+        .handle = &shared_i2c_handle
+    }
+};
 
 static telemetrix_profile_t profile(void)
 {
@@ -238,4 +247,34 @@ TEST_CASE("On release: shared (application-owned) I2C and ADC handles untouched"
     TEST_ASSERT_EQUAL(0, tmx_fake_count("ow_close"));
     TEST_ASSERT_EQUAL(0, tmx_fake_count("adc_read"));
     TEST_ASSERT_EQUAL_STRING("gpio_input(5,0,1)\ngpio_output(21,1)\n", tmx_fake_calls());
+}
+
+TEST_CASE("On release: LEDC channels are stopped before any pin gets its safe state", "[claims]")
+{
+    telemetrix_profile_t p = profile();
+    tmx_claims_t c;
+    uint8_t ch, t;
+    start(&c, &p);
+    tmx_claim_pin(&c, 2, TMX_USE_PWM);
+    tmx_claim_ledc(&c, 1000, 8, &ch, &t);
+    tmx_fake_reset();
+    tmx_claims_release_all(&c);
+    TEST_ASSERT_EQUAL_STRING("ledc_stop(0,0)\nledc_timer_free(0,0)\ngpio_output(2,0)\n", tmx_fake_calls());
+}
+
+TEST_CASE("On a driver error configuring the timer: the error is returned and nothing is claimed", "[claims]")
+{
+    telemetrix_profile_t p = profile();
+    tmx_claims_t c;
+    uint8_t ch = 99, t = 99;
+    start(&c, &p);
+    tmx_fake_fail_next("ledc_timer", ESP_ERR_NO_MEM);
+    TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM, tmx_claim_ledc(&c, 1000, 8, &ch, &t));
+    TEST_ASSERT_EQUAL(99, ch);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_ledc(&c, 1000, 8, &ch, &t));
+    TEST_ASSERT_EQUAL(0, ch);
+    TEST_ASSERT_EQUAL(0, t);
+    tmx_fake_reset();
+    tmx_claims_release_all(&c);
+    TEST_ASSERT_EQUAL_STRING("ledc_stop(0,0)\nledc_timer_free(0,0)\n", tmx_fake_calls());
 }

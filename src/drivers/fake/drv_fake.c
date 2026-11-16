@@ -9,6 +9,7 @@
 #define FAKE_I2C_DEVICES 8
 #define FAKE_OW_ROMS 8
 #define FAKE_LOG_SIZE 16384
+#define FAKE_FAILS 16
 
 typedef enum { MODE_NONE, MODE_INPUT, MODE_OUTPUT } pin_mode_t;
 
@@ -35,6 +36,12 @@ typedef struct {
     size_t ow_next[FAKE_BUSES];
     char log[FAKE_LOG_SIZE];
     size_t log_len;
+    bool log_truncated;
+    struct {
+        char op[24];
+        esp_err_t err;
+        bool pending;
+    } fail[FAKE_FAILS];
 } fake_t;
 
 static fake_t fake;
@@ -46,7 +53,14 @@ static void record(const char *fmt, ...)
     va_start(ap, fmt);
     int n = vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
-    if (n < 0 || fake.log_len + (size_t)n + 1 >= sizeof(fake.log)) {
+    if (n < 0) {
+        return;
+    }
+    if ((size_t)n >= sizeof(line)) {
+        n = sizeof(line) - 1;
+    }
+    if (fake.log_len + (size_t)n + 1 >= sizeof(fake.log)) {
+        fake.log_truncated = true;
         return;
     }
     memcpy(fake.log + fake.log_len, line, (size_t)n);
@@ -119,6 +133,36 @@ void tmx_fake_ow_devices(uint8_t bus, const uint8_t (*roms)[8], size_t n)
     }
 }
 
+void tmx_fake_fail_next(const char *op, esp_err_t err)
+{
+    for (int i = 0; i < FAKE_FAILS; i++) {
+        if (!fake.fail[i].pending) {
+            strncpy(fake.fail[i].op, op, sizeof(fake.fail[i].op) - 1);
+            fake.fail[i].op[sizeof(fake.fail[i].op) - 1] = '\0';
+            fake.fail[i].err = err;
+            fake.fail[i].pending = true;
+            return;
+        }
+    }
+}
+
+/* The error a test queued for the next call of op, or ESP_OK. */
+static esp_err_t injected(const char *op)
+{
+    for (int i = 0; i < FAKE_FAILS; i++) {
+        if (fake.fail[i].pending && strcmp(fake.fail[i].op, op) == 0) {
+            fake.fail[i].pending = false;
+            return fake.fail[i].err;
+        }
+    }
+    return ESP_OK;
+}
+
+bool tmx_fake_log_truncated(void)
+{
+    return fake.log_truncated;
+}
+
 const char *tmx_fake_calls(void)
 {
     return fake.log;
@@ -141,6 +185,10 @@ size_t tmx_fake_count(const char *name)
 static esp_err_t f_gpio_input(uint8_t gpio, bool pull_up, bool pull_down)
 {
     record("gpio_input(%u,%d,%d)", gpio, pull_up, pull_down);
+    esp_err_t inj = injected("gpio_input");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     fake.mode[gpio] = MODE_INPUT;
     fake.pull_up[gpio] = pull_up;
     fake.pull_down[gpio] = pull_down;
@@ -150,6 +198,10 @@ static esp_err_t f_gpio_input(uint8_t gpio, bool pull_up, bool pull_down)
 static esp_err_t f_gpio_output(uint8_t gpio, bool level)
 {
     record("gpio_output(%u,%d)", gpio, level);
+    esp_err_t inj = injected("gpio_output");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     fake.mode[gpio] = MODE_OUTPUT;
     fake.out_level[gpio] = level;
     return ESP_OK;
@@ -179,18 +231,30 @@ static int f_gpio_get(uint8_t gpio)
 static esp_err_t f_ledc_timer(uint8_t speed_mode, uint8_t timer, uint32_t freq_hz, uint8_t resolution)
 {
     record("ledc_timer(%u,%u,%u,%u)", speed_mode, timer, (unsigned)freq_hz, resolution);
+    esp_err_t inj = injected("ledc_timer");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return ESP_OK;
 }
 
 static esp_err_t f_ledc_attach(uint8_t speed_mode, uint8_t channel, uint8_t timer, uint8_t gpio)
 {
     record("ledc_attach(%u,%u,%u,%u)", speed_mode, channel, timer, gpio);
+    esp_err_t inj = injected("ledc_attach");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return ESP_OK;
 }
 
 static esp_err_t f_ledc_duty(uint8_t speed_mode, uint8_t channel, uint32_t duty)
 {
     record("ledc_duty(%u,%u,%u)", speed_mode, channel, (unsigned)duty);
+    esp_err_t inj = injected("ledc_duty");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return ESP_OK;
 }
 
@@ -206,6 +270,10 @@ static void f_ledc_timer_free(uint8_t speed_mode, uint8_t timer)
 
 static esp_err_t f_adc_read(uint8_t unit, uint8_t channel, int *raw)
 {
+    esp_err_t inj = injected("adc_read");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     if (unit >= 4 || channel >= 20) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -217,6 +285,10 @@ static esp_err_t f_i2c_open(uint8_t bus, const telemetrix_i2c_bus_t *grant, int8
 {
     (void)grant;
     record("i2c_open(%u,%d,%d)", bus, sda, scl);
+    esp_err_t inj = injected("i2c_open");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return ESP_OK;
 }
 
@@ -238,6 +310,10 @@ static esp_err_t f_i2c_read(uint8_t bus, uint8_t addr, uint8_t reg, bool stop, u
 {
     (void)timeout_ms;
     record("i2c_read(%u,%u,%u,%d,%u)", bus, addr, reg, stop, (unsigned)n);
+    esp_err_t inj = injected("i2c_read");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     i2c_device_t *d = find_device(bus, addr);
     if (!d) {
         return ESP_FAIL;
@@ -254,6 +330,10 @@ static esp_err_t f_i2c_write(uint8_t bus, uint8_t addr, const uint8_t *data, siz
     (void)data;
     (void)timeout_ms;
     record("i2c_write(%u,%u,%u)", bus, addr, (unsigned)n);
+    esp_err_t inj = injected("i2c_write");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return find_device(bus, addr) ? ESP_OK : ESP_FAIL;
 }
 
@@ -265,6 +345,10 @@ static void f_i2c_close(uint8_t bus)
 static esp_err_t f_ow_open(uint8_t bus, uint8_t gpio)
 {
     record("ow_open(%u,%u)", bus, gpio);
+    esp_err_t inj = injected("ow_open");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return ESP_OK;
 }
 
@@ -311,12 +395,20 @@ static void f_ow_close(uint8_t bus)
 static esp_err_t f_dht_start(uint8_t gpio, uint32_t token)
 {
     record("dht_start(%u,%u)", gpio, (unsigned)token);
+    esp_err_t inj = injected("dht_start");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return ESP_OK;
 }
 
 static esp_err_t f_sonar_start(uint8_t trig, uint8_t echo, uint32_t token)
 {
     record("sonar_start(%u,%u,%u)", trig, echo, (unsigned)token);
+    esp_err_t inj = injected("sonar_start");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return ESP_OK;
 }
 
@@ -324,6 +416,10 @@ static esp_err_t f_init(const telemetrix_profile_t *p)
 {
     (void)p;
     record("init()");
+    esp_err_t inj = injected("init");
+    if (inj != ESP_OK) {
+        return inj;
+    }
     return ESP_OK;
 }
 

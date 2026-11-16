@@ -22,6 +22,12 @@ void tmx_fake_sonar_echo(uint8_t trig, uint32_t us);
 /** The ROMs the 1-wire search on bus finds. */
 void tmx_fake_ow_devices(uint8_t bus, const uint8_t (*roms)[8], size_t n);
 
+/** The next call of op (a driver function name, e.g. "ledc_timer") is recorded, does nothing else and returns err once.
+ *  Works for every operation returning esp_err_t; cleared by tmx_fake_reset. */
+void tmx_fake_fail_next(const char *op, esp_err_t err);
+/** True once a call was left out of the log because it was full (cleared by tmx_fake_reset). */
+bool tmx_fake_log_truncated(void);
+
 /** The recorded calls as "name(args)" lines, each ending in a newline. gpio_get is not recorded. */
 const char *tmx_fake_calls(void);
 /** How many recorded calls are named name. */

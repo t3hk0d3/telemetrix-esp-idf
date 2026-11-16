@@ -218,14 +218,14 @@ void tmx_release_rmt_rx(tmx_claims_t *c)
 
 void tmx_claims_release_all(tmx_claims_t *c)
 {
+    for (uint8_t ch = 0; ch < TMX_LEDC_CHANNELS; ch++) {
+        tmx_release_ledc(c, ch);
+    }
     for (size_t i = 0; i < c->profile->n_pins; i++) {
         if (c->use[i] != TMX_USE_NONE) {
             c->use[i] = TMX_USE_NONE;
             apply_safe_state(c, &c->profile->pins[i]);
         }
-    }
-    for (uint8_t ch = 0; ch < TMX_LEDC_CHANNELS; ch++) {
-        tmx_release_ledc(c, ch);
     }
     reset_peripherals(c);
 }
