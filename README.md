@@ -13,6 +13,9 @@ The wire protocol and the Python client come from [Telemetrix4Esp32](https://git
 Alan Yorinks (MrYsLab); this component reimplements the server side of that protocol. Licensed under
 AGPL-3.0-or-later, copyright Igor Yamolov.
 
+The asyncio Python client for the extended protocol (it also drives upstream firmware in stock mode) is documented in
+[client/README.md](client/README.md).
+
 ## Quick start
 
 The `examples/esp32_poe` example targets the Olimex ESP32-POE (original ESP32, LAN8720 Ethernet); the same example
@@ -396,9 +399,14 @@ while the socket is backed up a fast pulse (0, 1, 0) on a digital input can reac
 - `make host-server`: build the real server for `linux` with a fake driver layer. `--stock-only` sets
   `config.extended` false; `--test-plugin` registers the test plugin `test.echo` and grants gpio 36 its named
   capability `test.led`. The host profile adds I2C bus 1 (sda 2, scl 15, a device at 0x48), 1-wire bus 1 (gpio 35, one
-  ROM) and gpio 36 to the stock client's pins.
+  ROM) and gpio 36 to the stock client's pins; gpio 36 reads back on gpio 35.
 - `make test-integration`: pytest against the host server with the stock client, hostile clients, and the recording
   proxy tests (including one run of the compatibility script).
+- `tools/hostile/hostile_client.py --host H --port P --mode {flood,garbage,ext-garbage,stall,storm,all}`: a standalone
+  hostile client (standard library only). After each mode a fresh connection must still get the handshake answer and a
+  LOOP reply. It runs in `make test-integration` against the host server (which also checks that no file descriptor
+  leaks) and can be pointed at a board; the stall drop takes the server's `send_stall_ms` (10 s by default).
+- `make client-test` and `make client-integration`: the Python client's unit tests and its tests against the host server.
 - `make build-examples`: build every board example.
 
 **Compatibility pass on a board** (`tools/compat`, needs `tools/.venv` from `make test-integration`). The recording

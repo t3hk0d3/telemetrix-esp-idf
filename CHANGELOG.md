@@ -9,3 +9,9 @@
   examples for the Olimex ESP32-POE (Ethernet and Wi-Fi), ESP32-S3 and ESP32-C6 (a P4 build check).
 - Compatibility tools: a recording proxy and a script that compares upstream firmware with this component.
 - README: profile and grants, protocol table, deviations from upstream, requirements and security notes.
+- M2, extended mode and the Python client: the handshake and sequence-numbered commands with per-command ERROR and
+  SYNC barriers (SYNC flag governs the commands after it), ON_BUS for I2C and 1-wire buses beyond 0, capability
+  discovery (chip, pins, buses, limits, plugins), the plugin API with named pin capabilities, `cfg.extended` and
+  `CONFIG_TELEMETRIX_EXTENDED`, status counters, an extended fuzz target, and the asyncio client `telemetrix_idf` in
+  `client/` (chains, events, stock-mode fallback, plugin halves with request ids). Plus `tools/hostile/hostile_client.py`,
+  a flood/garbage/stall/storm script for the host server and boards.
