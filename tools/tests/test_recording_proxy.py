@@ -359,6 +359,38 @@ def test_compare_collapses_repeated_and_initial_digital_reports(tmp_path):
     assert compat_test.compare(a, c) != []
 
 
+def loopback_log(tmp_path, name, initial):
+    """The scripted loopback: OUT 32 output and low, IN 33 input with reports, then writes 1, 0 each echoed by IN."""
+    packets = [
+        entry("c2s", 1, 32, 1),
+        entry("c2s", 2, 32, 0),
+        entry("c2s", 1, 33, 0, 1),
+    ]
+    packets += [entry("s2c", 2, 33, v) for v in initial]
+    for level in (1, 0):
+        packets += [entry("c2s", 2, 32, level), entry("s2c", 2, 33, level)]
+    return write_log(tmp_path / name, packets)
+
+
+def test_compare_ignores_digital_reports_before_the_first_write_after_the_input_mode(
+    tmp_path,
+):
+    none = loopback_log(tmp_path, "none.log", [])
+    low = loopback_log(tmp_path, "low.log", [0])
+    high = loopback_log(tmp_path, "high.log", [1])
+    assert compat_test.compare(none, low) == []
+    assert compat_test.compare(none, high) == []
+    assert compat_test.compare(low, high) == []
+
+
+def test_compare_still_reports_a_wrong_digital_value_after_the_first_write(tmp_path):
+    good = loopback_log(tmp_path, "good.log", [0])
+    packets = [json.loads(line) for line in good.read_text().splitlines()]
+    packets[-1] = entry("s2c", 2, 33, 1)  # IN stays high after OUT went low
+    bad = write_log(tmp_path / "bad.log", packets)
+    assert compat_test.compare(good, bad) != []
+
+
 def test_compare_fails_when_a_log_has_no_server_packets(tmp_path):
     a = session(tmp_path, "a.log")
     empty = write_log(tmp_path / "empty.log", [entry("c2s", 5)])

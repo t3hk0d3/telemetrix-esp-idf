@@ -13,7 +13,9 @@ and RESET (upstream firmware reboots on RESET) but leaves the socket open, so th
 
 --compare normalises what legitimately differs between two boards and diffs the rest: timestamps are dropped; the
 firmware build byte (3.2.0 against 3.2.100) is zeroed; digital reports are reduced, per pin, to the sequence of distinct
-consecutive values (a board that sends an initial or repeated report equal to the neighbouring one is not different);
+consecutive values (a board that sends an initial or repeated report equal to the neighbouring one is not different),
+and a digital report on an input pin that arrives after its SET_PIN_MODE and before the next DIGITAL_WRITE command (the
+initial report, whose value is the input's before the loopback drives it) is left out;
 a recording with no server packets is itself a difference; analog, sonar and DHT reports are periodic and carry sensor
 values, so they are taken out of the sequence and compared as the set of (kind, pin, DHT data/error) seen. Everything
 else (every command, every reply, I2C data, 1-wire results) must match byte for byte. The
@@ -35,6 +37,9 @@ from recording_proxy import RecordingProxy
 
 WAIT = 5.0
 FIRMWARE_ID = 5
+SET_PIN_MODE_ID = 1
+DIGITAL_WRITE_ID = 2
+DIGITAL_INPUT_MODES = {0, 2, 9}  # input, pull-up, pull-down
 PERIODIC = {3: "analog", 10: "sonar", 11: "dht"}
 
 
@@ -212,9 +217,15 @@ def normalise(entries):
     lines = []
     periodic = set()
     digital = {}  # pin -> last value seen: a repeated value is not a change, whether or not a board sends it
+    settling = set()  # input pins set up since the last DIGITAL_WRITE: their initial report is not compared
     for e in entries:
         payload = bytes.fromhex(e["bytes"])
         rid = e["id"]
+        if e["dir"] == "c2s" and rid == SET_PIN_MODE_ID and len(payload) >= 2:
+            if payload[1] in DIGITAL_INPUT_MODES:
+                settling.add(payload[0])
+        elif e["dir"] == "c2s" and rid == DIGITAL_WRITE_ID:
+            settling.clear()
         if e["dir"] == "s2c" and rid in PERIODIC:
             if rid == 11:
                 key = (
@@ -232,6 +243,8 @@ def normalise(entries):
             and len(payload) == 2
             and not e.get("partial")
         ):
+            if payload[0] in settling:
+                continue  # a board may or may not send an initial report, and its value is the floating input's
             if digital.get(payload[0]) == payload[1]:
                 continue
             digital[payload[0]] = payload[1]

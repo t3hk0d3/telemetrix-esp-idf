@@ -263,8 +263,10 @@ GPIO32 (output) to GPIO33 (input) on the Olimex example (the default `--loopback
 `--onewire PIN` add the devices you have. `--strict` fails when the board sends a report id or length the stock client
 does not dispatch (the client silently ignores those). `--compare` normalises timestamps and the firmware build byte
 (3.2.0 against 3.2.100); reduces digital reports, per pin, to the sequence of distinct consecutive values (so an initial
-or repeated report that one board sends and the other does not is not a difference); and takes the periodic analog,
-sonar and DHT reports out of the sequence, comparing only which (kind, pin, data or error) appeared. Everything else is
+or repeated report that one board sends and the other does not is not a difference); leaves out a digital report on an
+input that arrives after its `SET_PIN_MODE` and before the next `DIGITAL_WRITE` (the initial report: one board may send
+it and the other not, and its value depends on the input's state before the loopback drives it); and takes the
+periodic analog, sonar and DHT reports out of the sequence, comparing only which (kind, pin, data or error) appeared. Everything else is
 byte for byte, and any difference is printed with context (exit 1). A log with no server packets also fails.
 Because periodic reports are not compared byte for byte, `--strict` is what catches a malformed one (and a connection
 that ends inside a packet).
