@@ -107,6 +107,7 @@ bool esp_ow_search(uint8_t bus, uint8_t rom[8])
     onewire_device_t dev;
     esp_err_t err = onewire_device_iter_get_next(o->iter, &dev);
     if (err != ESP_OK) {
+        drop_iter(o);   /* the next search starts over */
         if (err == ESP_ERR_INVALID_CRC && !crc_logged) {   /* counts as no device */
             crc_logged = true;
             ESP_LOGW(TAG, "1-wire search on gpio %u: bad CRC in a ROM id", o->gpio);

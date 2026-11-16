@@ -47,6 +47,11 @@ typedef struct {
     uint16_t channel_mask;
 } telemetrix_ledc_grant_t;
 
+/** RMT channels the server may create (DHT, 1-wire).
+ *  Requirements: the sonar echo handler and the DHT receive callback are not IRAM-safe (their completion path is in
+ *  flash), so while sonar is used an application-installed GPIO ISR service must not use ESP_INTR_FLAG_IRAM, and
+ *  CONFIG_RMT_RX_ISR_CACHE_SAFE is not supported (the DHT channel creation would fail). The server never uninstalls the
+ *  GPIO ISR service. */
 typedef struct {
     uint8_t rx_channels;
     uint8_t tx_channels;

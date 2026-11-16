@@ -4,6 +4,7 @@
 
 static esp_err_t n_init(const telemetrix_profile_t *p)
 {
+    esp_pulse_init();
     esp_onewire_init(p);
     return esp_adc_init(p);
 }

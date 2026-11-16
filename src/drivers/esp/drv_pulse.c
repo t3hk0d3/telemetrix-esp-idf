@@ -6,15 +6,17 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 #include "soc/soc_caps.h"
 
 #include "tmx_core.h"
 #include "tmx_drv_esp.h"
 
-/* DHT and sonar measurements. Both start without blocking and complete exactly once through tmx_completion_post: each
- * measurement owns an `active` flag that start sets and the first of {data callback, timeout timer} clears with an
- * exchange, so the loser of that race posts nothing. A timeout timer that fires late for an earlier measurement is
- * recognised by its deadline. */
+/* DHT and sonar measurements. Both start without blocking and complete exactly once through tmx_completion_post. A
+ * measurement has one atomic word `state` = generation << 1 | active. Start publishes a new generation; every timer,
+ * RMT callback and ISR finishes with a compare-and-swap on the generation it belongs to, so a late callback of an
+ * earlier start, or the loser of the data/timeout race, posts nothing. Start also stops its timers with a blocking stop,
+ * so no callback of an earlier start is still running. */
 static const char *TAG = "telemetrix";
 
 #define DHT_START_LOW_US 1000
@@ -26,17 +28,28 @@ static const char *TAG = "telemetrix";
 #define RX_SYMBOLS SOC_RMT_MEM_WORDS_PER_CHANNEL
 #define SONAR_TRIGGER_US 10
 #define SONAR_TIMEOUT_US 25000
+#define STOP_WAIT_TICKS pdMS_TO_TICKS(50)
 
 typedef struct {
-    atomic_bool active;
-    volatile int64_t deadline_us;   /* when the timeout timer of the running measurement may fire */
-    uint32_t token;
+    atomic_uint state;          /* generation << 1 | active */
+    atomic_uint armed_gen;      /* generation the timeout timer was armed for, 0 = none */
+    uint32_t token;             /* written while inactive, before the generation is published */
     esp_timer_handle_t timeout;
 } measure_t;
 
-static void finish(measure_t *m, uint8_t kind, esp_err_t err, uint32_t value, const uint8_t *data)
+/* The driver runs between init and deinit; callbacks check it before they touch channels or arm timers. */
+static atomic_bool alive;
+
+static bool is_active(unsigned state)
 {
-    if (!atomic_exchange(&m->active, false)) {
+    return state & 1;
+}
+
+/* Complete generation `gen`: only the first caller for the running generation posts. */
+static void finish(measure_t *m, unsigned gen, uint8_t kind, esp_err_t err, uint32_t value, const uint8_t *data)
+{
+    unsigned want = (gen << 1) | 1;
+    if (gen == 0 || !atomic_compare_exchange_strong(&m->state, &want, gen << 1)) {
         return;
     }
     tmx_completion_t c = {.kind = kind, .token = m->token, .err = err, .value = value};
@@ -46,27 +59,46 @@ static void finish(measure_t *m, uint8_t kind, esp_err_t err, uint32_t value, co
     tmx_completion_post(&c);
 }
 
-/* A timer that was meant for an earlier measurement fires before the deadline of the running one. */
-static bool timer_is_due(const measure_t *m)
+/* The running generation, 0 when none is running. */
+static unsigned running_gen(const measure_t *m)
 {
-    return esp_timer_get_time() + 500 >= m->deadline_us;
+    unsigned s = atomic_load(&m->state);
+    return is_active(s) ? s >> 1 : 0;
 }
 
-/* Begin a measurement: false when one is still running. */
-static bool begin(measure_t *m, uint32_t token)
+static bool stop_blocking(esp_timer_handle_t t)
 {
-    if (atomic_exchange(&m->active, true)) {
+    if (!t) {
+        return true;
+    }
+    esp_err_t err = esp_timer_stop_blocking(t, STOP_WAIT_TICKS);
+    if (err == ESP_ERR_TIMEOUT || err == ESP_ERR_NOT_FINISHED) {
+        ESP_LOGW(TAG, "timer callback still running after 50 ms");
         return false;
     }
-    if (m->timeout) {
-        esp_timer_stop(m->timeout);
-    }
-    m->deadline_us = INT64_MAX;
-    m->token = token;
     return true;
 }
 
-static esp_err_t arm_timeout(measure_t *m, esp_timer_cb_t cb, const char *name, uint32_t us)
+/* Begin a measurement: 0 when one is still running or a timer would not stop, else its generation. */
+static unsigned begin(measure_t *m, esp_timer_handle_t release, uint32_t token)
+{
+    unsigned s = atomic_load(&m->state);
+    if (is_active(s) || !stop_blocking(m->timeout) || !stop_blocking(release)) {
+        return 0;
+    }
+    atomic_store(&m->armed_gen, 0);
+    m->token = token;
+    unsigned gen = (s >> 1) + 1;
+    if (gen == 0) {
+        gen = 1;
+    }
+    if (!atomic_compare_exchange_strong(&m->state, &s, (gen << 1) | 1)) {
+        return 0;
+    }
+    return gen;
+}
+
+static esp_err_t arm_timeout(measure_t *m, unsigned gen, esp_timer_cb_t cb, const char *name, uint32_t us)
 {
     if (!m->timeout) {
         const esp_timer_create_args_t args = {.callback = cb, .name = name};
@@ -76,7 +108,7 @@ static esp_err_t arm_timeout(measure_t *m, esp_timer_cb_t cb, const char *name, 
             return err;
         }
     }
-    m->deadline_us = esp_timer_get_time() + us;
+    atomic_store(&m->armed_gen, gen);
     return esp_timer_start_once(m->timeout, us);
 }
 
@@ -87,6 +119,7 @@ static struct {
     rmt_channel_handle_t chan;
     int chan_gpio;
     uint8_t gpio;
+    atomic_uint release_gen;    /* generation the release timer was started for */
     esp_timer_handle_t release;
     rmt_symbol_word_t symbols[RX_SYMBOLS];
 } dht = {.chan_gpio = -1};
@@ -142,7 +175,7 @@ static bool dht_recv_done(rmt_channel_handle_t ch, const rmt_rx_done_event_data_
     (void)ch, (void)ctx;
     uint8_t frame[5] = {0};
     esp_err_t err = dht_decode(ev->received_symbols, ev->num_symbols, frame);
-    finish(&dht.m, TMX_COMPLETION_DHT, err, 0, frame);   /* the timeout timer is stopped by the next start */
+    finish(&dht.m, running_gen(&dht.m), TMX_COMPLETION_DHT, err, 0, frame);   /* the next start stops the timer */
     return false;
 }
 
@@ -194,34 +227,40 @@ static esp_err_t dht_channel(uint8_t gpio)
 static void dht_timeout_cb(void *arg)
 {
     (void)arg;
-    if (!atomic_load(&dht.m.active) || !timer_is_due(&dht.m)) {
+    unsigned gen = atomic_load(&dht.m.armed_gen);
+    if (!atomic_load(&alive) || gen == 0 || gen != running_gen(&dht.m)) {
         return;
     }
     if (dht.chan) {
         rmt_disable(dht.chan);   /* abandon the stuck reception */
         rmt_enable(dht.chan);
     }
-    finish(&dht.m, TMX_COMPLETION_DHT, ESP_ERR_TIMEOUT, 0, NULL);
+    finish(&dht.m, gen, TMX_COMPLETION_DHT, ESP_ERR_TIMEOUT, 0, NULL);
 }
 
 /* 1 ms after the start pulse: arm the receiver while the line is still low, then release it. */
 static void dht_release_cb(void *arg)
 {
     (void)arg;
+    unsigned gen = atomic_load(&dht.release_gen);
+    if (!atomic_load(&alive) || gen == 0 || gen != running_gen(&dht.m)) {
+        return;
+    }
     const rmt_receive_config_t rc = {.signal_range_min_ns = DHT_GLITCH_NS, .signal_range_max_ns = DHT_IDLE_NS};
     esp_err_t err = rmt_receive(dht.chan, dht.symbols, sizeof(dht.symbols), &rc);
     gpio_set_level((gpio_num_t)dht.gpio, 1);
     if (err == ESP_OK) {
-        err = arm_timeout(&dht.m, dht_timeout_cb, "tmx_dht", DHT_TIMEOUT_US);
+        err = arm_timeout(&dht.m, gen, dht_timeout_cb, "tmx_dht", DHT_TIMEOUT_US);
     }
     if (err != ESP_OK) {
-        finish(&dht.m, TMX_COMPLETION_DHT, err, 0, NULL);
+        finish(&dht.m, gen, TMX_COMPLETION_DHT, err, 0, NULL);
     }
 }
 
 esp_err_t esp_dht_start(uint8_t gpio, uint32_t token)
 {
-    if (!begin(&dht.m, token)) {
+    unsigned gen = begin(&dht.m, dht.release, token);
+    if (!gen) {
         return ESP_ERR_INVALID_STATE;
     }
     esp_err_t err = ESP_OK;
@@ -247,11 +286,12 @@ esp_err_t esp_dht_start(uint8_t gpio, uint32_t token)
         }
     }
     if (err == ESP_OK) {
+        atomic_store(&dht.release_gen, gen);
         err = esp_timer_start_once(dht.release, DHT_START_LOW_US);
     }
     if (err != ESP_OK) {
         gpio_set_level((gpio_num_t)gpio, 1);
-        atomic_store(&dht.m.active, false);
+        atomic_store(&dht.m.state, gen << 1);
         ESP_LOGD(TAG, "dht on gpio %u: %s", gpio, esp_err_to_name(err));
     }
     return err;
@@ -263,20 +303,19 @@ static struct {
     measure_t m;
     uint8_t echo;
     atomic_bool attached;       /* the echo handler is added */
-    volatile int64_t rise_us;
-    bool isr_service_ours;
+    volatile uint32_t rise_us;  /* low 32 bits of esp_timer_get_time, 0 = no rise yet */
 } sonar;
 
 static void echo_isr(void *arg)
 {
-    int64_t now = esp_timer_get_time();
+    uint32_t now = (uint32_t)esp_timer_get_time() | 1;   /* odd, so never 0 */
     if (gpio_get_level((gpio_num_t)(intptr_t)arg)) {
         if (sonar.rise_us == 0) {
             sonar.rise_us = now;
         }
     } else if (sonar.rise_us != 0) {
         gpio_intr_disable((gpio_num_t)(intptr_t)arg);
-        finish(&sonar.m, TMX_COMPLETION_SONAR, ESP_OK, (uint32_t)(now - sonar.rise_us), NULL);
+        finish(&sonar.m, running_gen(&sonar.m), TMX_COMPLETION_SONAR, ESP_OK, now - sonar.rise_us, NULL);
     }
 }
 
@@ -293,25 +332,24 @@ static void sonar_detach(void)
 static void sonar_timeout_cb(void *arg)
 {
     (void)arg;
-    if (!timer_is_due(&sonar.m)) {
+    unsigned gen = atomic_load(&sonar.m.armed_gen);
+    if (!atomic_load(&alive) || gen == 0 || (atomic_load(&sonar.m.state) >> 1) != gen) {
         return;
     }
     sonar_detach();    /* after a completion by the echo too: the handler goes when the 25 ms are over */
-    finish(&sonar.m, TMX_COMPLETION_SONAR, ESP_ERR_TIMEOUT, 0, NULL);
+    finish(&sonar.m, gen, TMX_COMPLETION_SONAR, ESP_ERR_TIMEOUT, 0, NULL);
 }
 
 static esp_err_t isr_service(void)
 {
-    esp_err_t err = gpio_install_isr_service(0);
-    if (err == ESP_OK) {
-        sonar.isr_service_ours = true;
-    }
+    esp_err_t err = gpio_install_isr_service(0);   /* never uninstalled: the application may have handlers in it */
     return err == ESP_ERR_INVALID_STATE ? ESP_OK : err;   /* installed already */
 }
 
 esp_err_t esp_sonar_start(uint8_t trig, uint8_t echo, uint32_t token)
 {
-    if (!begin(&sonar.m, token)) {
+    unsigned gen = begin(&sonar.m, NULL, token);
+    if (!gen) {
         return ESP_ERR_INVALID_STATE;
     }
     sonar_detach();    /* the handler of the previous ping, if its timer has not run yet */
@@ -332,7 +370,7 @@ esp_err_t esp_sonar_start(uint8_t trig, uint8_t echo, uint32_t token)
     }
     if (err != ESP_OK) {
         gpio_set_intr_type((gpio_num_t)echo, GPIO_INTR_DISABLE);
-        atomic_store(&sonar.m.active, false);
+        atomic_store(&sonar.m.state, gen << 1);
         return err;
     }
     atomic_store(&sonar.attached, true);
@@ -340,20 +378,26 @@ esp_err_t esp_sonar_start(uint8_t trig, uint8_t echo, uint32_t token)
     esp_gpio_set(trig, true);
     esp_rom_delay_us(SONAR_TRIGGER_US);
     esp_gpio_set(trig, false);
-    err = arm_timeout(&sonar.m, sonar_timeout_cb, "tmx_sonar", SONAR_TIMEOUT_US);
+    err = arm_timeout(&sonar.m, gen, sonar_timeout_cb, "tmx_sonar", SONAR_TIMEOUT_US);
     if (err != ESP_OK) {
         sonar_detach();
-        atomic_store(&sonar.m.active, false);
+        atomic_store(&sonar.m.state, gen << 1);
     }
     return err;
 }
 
 /* ---- release ---- */
 
-static void stop_timer(esp_timer_handle_t *t)
+void esp_pulse_init(void)
 {
-    if (*t) {
-        esp_timer_stop(*t);
+    atomic_store(&alive, true);
+}
+
+/* Callbacks stop touching channels and timers first, then each timer is stopped with a wait for a running callback. A
+ * timer that will not stop is kept (leaked) rather than deleted under its callback. */
+static void drop_timer(esp_timer_handle_t *t)
+{
+    if (*t && stop_blocking(*t)) {
         esp_timer_delete(*t);
         *t = NULL;
     }
@@ -361,18 +405,15 @@ static void stop_timer(esp_timer_handle_t *t)
 
 void esp_pulse_deinit(void)
 {
-    stop_timer(&dht.release);
-    stop_timer(&dht.m.timeout);
-    atomic_store(&dht.m.active, false);
+    atomic_store(&alive, false);
+    atomic_fetch_and(&dht.m.state, ~1u);      /* nothing completes from now on */
+    atomic_fetch_and(&sonar.m.state, ~1u);
+    drop_timer(&dht.release);
+    drop_timer(&dht.m.timeout);
+    drop_timer(&sonar.m.timeout);
     if (dht.chan_gpio >= 0) {
         gpio_set_level((gpio_num_t)dht.chan_gpio, 1);
     }
     dht_free_channel();
-    stop_timer(&sonar.m.timeout);
     sonar_detach();
-    atomic_store(&sonar.m.active, false);
-    if (sonar.isr_service_ours) {   /* an installation by the application stays */
-        gpio_uninstall_isr_service();
-        sonar.isr_service_ours = false;
-    }
 }

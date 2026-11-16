@@ -48,6 +48,7 @@ void esp_ow_close(uint8_t bus);
  * timers and the GPIO handler */
 esp_err_t esp_dht_start(uint8_t gpio, uint32_t token);
 esp_err_t esp_sonar_start(uint8_t trig, uint8_t echo, uint32_t token);
+void esp_pulse_init(void);
 void esp_pulse_deinit(void);
 
 #endif
