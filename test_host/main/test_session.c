@@ -235,7 +235,7 @@ TEST_CASE("ids 59-60 in extended mode: ERROR NOT_IN_SCOPE until their tasks land
     FX_SEND(TMX_CMD_GET_CAPABILITIES, 0, 0);
     FX_SEND(TMX_CMD_PLUGIN, 0, 0, 0);
     const uint8_t e0[] = {ERR(0, TMX_CMD_GET_CAPABILITIES, TELEMETRIX_REASON_NOT_IN_SCOPE)};
-    const uint8_t e1[] = {ERR(1, TMX_CMD_PLUGIN, TELEMETRIX_REASON_NOT_IN_SCOPE)};
+    const uint8_t e1[] = {7, TMX_RPT_ERROR, 0, 1, TMX_CMD_PLUGIN, TELEMETRIX_REASON_NOT_IN_SCOPE, 0, 0};   /* + [slot, sub] */
     fx_assert_report(0, e0, sizeof(e0));
     fx_assert_report(1, e1, sizeof(e1));
     start_cfg(true);
@@ -259,7 +259,6 @@ TEST_CASE("servo exhaustion in extended mode: ERROR EXHAUSTED and no [2,6,pin]",
 TEST_CASE("I2C read nobody answers in extended mode: ERROR NO_ANSWER and no [3,8,1,addr]", "[session]")
 {
     start_ext();
-    fx_a.session.abort = false;
     FX_SEND0(TMX_CMD_I2C_BEGIN, 0);
     FX_SEND(TMX_CMD_I2C_READ, 0, 0x33, 0x10, 3, 1);
     const uint8_t e1[] = {ERR(1, TMX_CMD_I2C_READ, TELEMETRIX_REASON_NO_ANSWER)};

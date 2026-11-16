@@ -144,7 +144,7 @@ TEST_CASE("SYNC flag bits other than bit 0 are ignored", "[sync]")
     TEST_ASSERT_FALSE(fx_a.session.abort);
 }
 
-TEST_CASE("SYNC on a session just entered: abort is on", "[sync]")
+TEST_CASE("a session just entered: abort is on and nothing is skipped", "[sync]")
 {
     start_ext();
     TEST_ASSERT_TRUE(fx_a.session.abort);
@@ -354,7 +354,8 @@ TEST_CASE("ON_BUS 1-wire init and reset on bus 1: the driver call carries bus 1"
     TEST_ASSERT_EQUAL(0, fx_n_reports);
     FX_SEND(TMX_CMD_ON_BUS, 0, 1, TMX_CMD_ONE_WIRE_RESET);
     TEST_ASSERT_EQUAL(1, fx_n_reports);
-    TEST_ASSERT_EQUAL(1, fx_reports[0].data[2]);                /* BUS_REPORT [len, 59, bus, ...] */
+    const uint8_t want[] = {5, TMX_RPT_BUS_REPORT, 1, TMX_RPT_ONE_WIRE_REPORT, TMX_CMD_ONE_WIRE_RESET, 0};
+    fx_assert_report(0, want, sizeof(want));
     TEST_ASSERT_NOT_NULL(strstr(tmx_fake_calls(), "ow_reset(1)"));
 }
 
@@ -379,4 +380,43 @@ TEST_CASE("direct stock I2C in extended mode: acts on bus 0, reply is the stock 
     size_t n = tmx_rpt_i2c_read(want, 0x40, 0, regs, 2);
     TEST_ASSERT_EQUAL(1, fx_n_reports);
     fx_assert_report(0, want, n);
+}
+
+TEST_CASE("a skipped PLUGIN [3, 4]: ERROR [seq, 60, SKIPPED, 3, 4]", "[sync]")
+{
+    start_ext();
+    send_refused();
+    FX_SEND(TMX_CMD_PLUGIN, 0, 3, 4, 9);
+    const uint8_t e[] = {7, TMX_RPT_ERROR, 0, 1, TMX_CMD_PLUGIN, TELEMETRIX_REASON_SKIPPED, 3, 4};
+    TEST_ASSERT_EQUAL(2, fx_n_reports);
+    fx_assert_report(1, e, sizeof(e));
+}
+
+TEST_CASE("a PLUGIN command refused as NOT_IN_SCOPE: ERROR carries [slot, sub]", "[sync]")
+{
+    start_ext();
+    FX_SEND(TMX_CMD_PLUGIN, 0, 3, 4);
+    const uint8_t e[] = {7, TMX_RPT_ERROR, 0, 0, TMX_CMD_PLUGIN, TELEMETRIX_REASON_NOT_IN_SCOPE, 3, 4};
+    fx_assert_report(0, e, sizeof(e));
+}
+
+TEST_CASE("a skipped PLUGIN with fewer than 2 payload bytes: ERROR without [slot, sub]", "[sync]")
+{
+    start_ext();
+    send_refused();
+    FX_SEND(TMX_CMD_PLUGIN, 0, 3);
+    const uint8_t e[] = {ERR(1, TMX_CMD_PLUGIN, TELEMETRIX_REASON_SKIPPED)};
+    fx_assert_report(1, e, sizeof(e));
+}
+
+TEST_CASE("a skipped ON_BUS: ERROR SKIPPED with cmd 58, no driver call, on_bus -1", "[on_bus]")
+{
+    start_ext();
+    send_refused();
+    FX_SEND(TMX_CMD_ON_BUS, 0, 1, TMX_CMD_ONE_WIRE_RESET);
+    const uint8_t e[] = {ERR(1, TMX_CMD_ON_BUS, TELEMETRIX_REASON_SKIPPED)};
+    TEST_ASSERT_EQUAL(2, fx_n_reports);
+    fx_assert_report(1, e, sizeof(e));
+    TEST_ASSERT_EQUAL_STRING("", tmx_fake_calls());
+    TEST_ASSERT_EQUAL(-1, fx_a.on_bus);
 }

@@ -52,10 +52,13 @@ static void emit_long_answer(tmx_adapter_t *a)
     a->emit(out, n, true, TMX_COALESCE_NONE, 0, a->ctx);
 }
 
-static void emit_error(tmx_adapter_t *a, uint16_t seq, uint8_t cmd, telemetrix_reason_t why)
+/** An ERROR report; a PLUGIN command whose payload has [slot, sub] names them in the report. */
+static void emit_error(tmx_adapter_t *a, uint16_t seq, uint8_t cmd, telemetrix_reason_t why, const uint8_t *payload,
+                       size_t len)
 {
     uint8_t out[TMX_EXT_REPORT_MAX];
-    size_t n = tmx_rpt_error(out, seq, cmd, (uint8_t)why, -1, 0, -1);
+    const bool named = cmd == TMX_CMD_PLUGIN && len >= 2;
+    size_t n = tmx_rpt_error(out, seq, cmd, (uint8_t)why, named ? payload[0] : -1, named ? payload[1] : 0, -1);
     a->emit(out, n, true, TMX_COALESCE_NONE, 0, a->ctx);
     a->session.error_reports++;
 }
@@ -182,7 +185,7 @@ static void extended_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload
     if (why == TELEMETRIX_REASON_NONE) {
         return;
     }
-    emit_error(a, seq, id, why);
+    emit_error(a, seq, id, why, payload, len);
     if (why != TELEMETRIX_REASON_NOT_IN_SCOPE && why != TELEMETRIX_REASON_SKIPPED) {
         a->refused_commands++;
     }
