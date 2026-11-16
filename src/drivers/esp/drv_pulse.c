@@ -411,9 +411,6 @@ void esp_pulse_deinit(void)
     drop_timer(&dht.release);
     drop_timer(&dht.m.timeout);
     drop_timer(&sonar.m.timeout);
-    if (dht.chan_gpio >= 0) {
-        gpio_set_level((gpio_num_t)dht.chan_gpio, 1);
-    }
-    dht_free_channel();
+    dht_free_channel();         /* the pin is left alone: the release already put it in its safe state */
     sonar_detach();
 }
