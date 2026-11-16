@@ -11,7 +11,6 @@
 typedef struct {
     adc_oneshot_unit_handle_t handle; /* NULL = no grant */
     bool owned;                       /* created here, so deleted here */
-    uint16_t configured;              /* channel bits already configured */
 } unit_state_t;
 
 static unit_state_t units[UNITS];
@@ -66,17 +65,20 @@ esp_err_t esp_adc_read(uint8_t unit, uint8_t channel, int *raw)
     if (!u->handle) {
         return ESP_ERR_NOT_FOUND;
     }
-    /* A handle of the application may be reconfigured behind our back, so its channels are configured on every read. */
-    if (!u->owned || !(u->configured & (1u << channel))) {
-        const adc_oneshot_chan_cfg_t cfg = {
-            .atten = ADC_ATTEN_DB_12,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        esp_err_t err = adc_oneshot_config_channel(u->handle, (adc_channel_t)channel, &cfg);
-        if (err != ESP_OK) {
-            return err;
-        }
-        u->configured |= (uint16_t)(1u << channel);
+    /* Configured on every read: a handle of the application may be reconfigured behind our back, and a pin that was a
+     * digital input in between has its input buffer and pulls back on (configuring the channel turns them off). */
+    const adc_oneshot_chan_cfg_t cfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    esp_err_t err = adc_oneshot_config_channel(u->handle, (adc_channel_t)channel, &cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* The pin is analog now (input buffer and pulls off): the GPIO cache must not skip the next digital setup. */
+    int io = -1;
+    if (adc_oneshot_channel_to_io((adc_unit_t)unit, (adc_channel_t)channel, &io) == ESP_OK && io >= 0) {
+        esp_gpio_forget((uint8_t)io);
     }
     return adc_oneshot_read(u->handle, (adc_channel_t)channel, raw);
 }

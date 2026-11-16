@@ -91,6 +91,15 @@ esp_err_t esp_gpio_output(uint8_t gpio, bool level)
     return configure(gpio, GPIO_MODE_INPUT_OUTPUT, false, false);
 }
 
+void esp_gpio_init(void)
+{
+    /* Between a stop and the next start the application, or a peripheral the server released, may have changed any
+     * pin: no cached mode survives. Whether gpio_config has run stays known, so no pin goes through it twice. */
+    for (int i = 0; i < GPIO_NUM_MAX; i++) {
+        pins[i].mode = MODE_UNKNOWN;
+    }
+}
+
 void esp_gpio_forget(uint8_t gpio)
 {
     pin_state_t *s = pin_state(gpio);
