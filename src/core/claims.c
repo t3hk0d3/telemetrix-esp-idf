@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "tmx_core.h"
 
 #define LEDC_FREE 0xffu
@@ -16,6 +18,7 @@ static const char *const use_names[] = {
     [TMX_USE_SONAR_TRIG] = "sonar",
     [TMX_USE_SONAR_ECHO] = "sonar",
     [TMX_USE_DHT] = "dht",
+    [TMX_USE_PLUGIN] = "plugin",
 };
 
 static uint16_t caps_for(tmx_use_t use)
@@ -75,6 +78,7 @@ static void reset_peripherals(tmx_claims_t *c)
         c->timer_refs[i] = 0;
     }
     c->rmt_rx_used = 0;
+    c->rmt_tx_used = 0;
 }
 
 esp_err_t tmx_claims_init(tmx_claims_t *c, const telemetrix_profile_t *p, const tmx_drv_t *drv)
@@ -86,6 +90,7 @@ esp_err_t tmx_claims_init(tmx_claims_t *c, const telemetrix_profile_t *p, const 
     c->drv = drv;
     for (size_t i = 0; i < TMX_MAX_PINS; i++) {
         c->use[i] = TMX_USE_NONE;
+        c->owner[i] = 0;
     }
     reset_peripherals(c);
     esp_err_t first = ESP_OK;
@@ -114,6 +119,40 @@ esp_err_t tmx_claim_pin(tmx_claims_t *c, uint8_t gpio, tmx_use_t use)
     }
     c->use[idx] = (uint8_t)use;
     return ESP_OK;
+}
+
+static bool grants_name(const telemetrix_pin_t *pin, const char *name)
+{
+    for (size_t i = 0; name && pin->named && i < pin->n_named; i++) {
+        if (pin->named[i] && strcmp(pin->named[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+esp_err_t tmx_claim_named(tmx_claims_t *c, uint8_t gpio, const char *name, uint8_t owner)
+{
+    int idx = pin_index(c, gpio);
+    if (idx < 0 || !grants_name(&c->profile->pins[idx], name)) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    tmx_use_t current = (tmx_use_t)c->use[idx];
+    if (current == TMX_USE_PLUGIN && c->owner[idx] == owner) {
+        return ESP_OK;
+    }
+    if (current != TMX_USE_NONE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    c->use[idx] = (uint8_t)TMX_USE_PLUGIN;
+    c->owner[idx] = owner;
+    return ESP_OK;
+}
+
+int tmx_pin_owner(const tmx_claims_t *c, uint8_t gpio)
+{
+    int idx = pin_index(c, gpio);
+    return idx >= 0 && c->use[idx] == TMX_USE_PLUGIN ? c->owner[idx] : -1;
 }
 
 void tmx_release_pin(tmx_claims_t *c, uint8_t gpio)
@@ -213,6 +252,22 @@ void tmx_release_rmt_rx(tmx_claims_t *c)
 {
     if (c->rmt_rx_used > 0) {
         c->rmt_rx_used--;
+    }
+}
+
+esp_err_t tmx_claim_rmt_tx(tmx_claims_t *c)
+{
+    if (c->rmt_tx_used >= c->profile->rmt.tx_channels) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    c->rmt_tx_used++;
+    return ESP_OK;
+}
+
+void tmx_release_rmt_tx(tmx_claims_t *c)
+{
+    if (c->rmt_tx_used > 0) {
+        c->rmt_tx_used--;
     }
 }
 

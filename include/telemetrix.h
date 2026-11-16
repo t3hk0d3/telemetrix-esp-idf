@@ -39,6 +39,10 @@ typedef struct {
     telemetrix_safe_state_t safe;
     int8_t adc_unit;              /**< -1 = no ADC */
     int8_t adc_channel;           /**< -1 = no ADC */
+    /** Named capabilities a plugin may claim the pin for (each declared by a registered plugin); NULL/0 = none. The
+     *  strings must outlive the server; telemetrix_start copies the array. */
+    const char *const *named;
+    uint8_t n_named;
 } telemetrix_pin_t;
 
 typedef struct {
@@ -105,6 +109,8 @@ typedef struct {
 /** Parse "a.b.c.d/n", "a.b.c.d", "x::y/n" or "x::y" (no prefix = a single host). */
 esp_err_t telemetrix_cidr_parse(const char *text, telemetrix_cidr_t *out);
 
+struct telemetrix_plugin;        /* telemetrix_plugin.h */
+
 typedef struct {
     bool server_enabled;
     uint16_t port;
@@ -119,6 +125,11 @@ typedef struct {
     uint8_t task_priority;
     int8_t task_core;             /**< -1 = no affinity */
     bool extended;                /**< offer the extended protocol to a client that asks for it (needs CONFIG_TELEMETRIX_EXTENDED) */
+    uint32_t plugin_budget_us;    /**< a plugin command or poll call longer than this counts as an overrun */
+    /** Extension plugins (telemetrix_plugin.h) in slot order, at most TELEMETRIX_PLUGINS_MAX; the plugins must outlive
+     *  the server, telemetrix_start copies the array. Needs CONFIG_TELEMETRIX_EXTENDED (else ESP_ERR_NOT_SUPPORTED). */
+    const struct telemetrix_plugin *const *plugins;
+    size_t n_plugins;
 } telemetrix_config_t;
 
 void telemetrix_config_default(telemetrix_config_t *out);
@@ -157,6 +168,16 @@ typedef struct {
     const char *use;
 } telemetrix_pin_use_t;
 
+#define TELEMETRIX_PLUGINS_MAX 8
+
+/** One registered plugin's view in the status. */
+typedef struct {
+    char name[33];
+    uint8_t slot;
+    uint32_t commands, refusals, overruns, max_us, async_dropped;
+    char text[48];                /**< last telemetrix_plugin_set_status text */
+} telemetrix_plugin_status_t;
+
 typedef struct {
     bool running, listening;
     char client[TELEMETRIX_PEER_MAX];
@@ -164,6 +185,10 @@ typedef struct {
              stalled_clients;
     size_t n_pins;
     telemetrix_pin_use_t pins[64];
+    bool extended;                /**< the client is in extended mode */
+    uint32_t protocol_violations, error_reports;
+    size_t n_plugins;
+    telemetrix_plugin_status_t plugins[TELEMETRIX_PLUGINS_MAX];
 } telemetrix_status_t;
 
 /** Start the server. Copies the profile, the config and the hooks, including the arrays they point to. */

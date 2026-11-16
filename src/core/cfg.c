@@ -25,6 +25,9 @@ void telemetrix_config_default(telemetrix_config_t *out)
         .task_priority = 5,
         .task_core = -1,
         .extended = true,
+        .plugin_budget_us = 5000,
+        .plugins = NULL,
+        .n_plugins = 0,
     };
 }
 

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 #include "tmx_adapter.h"
 #include "tmx_core.h"
 #include "tmx_net.h"
@@ -29,6 +30,8 @@ struct tmx_server {
     telemetrix_i2c_bus_t *i2c;
     telemetrix_onewire_bus_t *onewire;
     telemetrix_cidr_t *allowed;
+    const telemetrix_plugin_t **plugins;
+    const char **named;                 /**< every pin's named-capability array, back to back */
 
     const tmx_drv_t *drv;
     tmx_adapter_t adapter;
@@ -73,9 +76,15 @@ static void emit(const uint8_t *report, size_t n, bool reply, int8_t kind, uint1
 static esp_err_t check_config(const telemetrix_config_t *c)
 {
     if (c->send_queue_bytes < TMX_REPORT_MAX || c->task_priority >= configMAX_PRIORITIES ||
-            c->task_core >= (int)configNUMBER_OF_CORES || (c->n_allowed > 0 && !c->allowed)) {
+            c->task_core >= (int)configNUMBER_OF_CORES || (c->n_allowed > 0 && !c->allowed) ||
+            (c->n_plugins > 0 && !c->plugins)) {
         return ESP_ERR_INVALID_ARG;
     }
+#ifndef CONFIG_TELEMETRIX_EXTENDED
+    if (c->n_plugins > 0) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+#endif
     for (size_t i = 0; i < c->n_allowed; i++) {
         const telemetrix_cidr_t *a = &c->allowed[i];
         if ((a->family != AF_INET || a->prefix > 32) && (a->family != AF_INET6 || a->prefix > 128)) {
@@ -91,6 +100,8 @@ void tmx_server_free(tmx_server_t *s)
         return;
     }
     tmx_completion_set_wake(NULL);
+    tmx_emit_ring_bump(false);
+    tmx_emit_ring_set_wake(NULL);
     tmx_wake_close();
     if (s->listener >= 0) {
         close(s->listener);
@@ -107,7 +118,39 @@ void tmx_server_free(tmx_server_t *s)
     free(s->i2c);
     free(s->onewire);
     free(s->allowed);
+    free(s->plugins);
+    free(s->named);
     free(s);
+}
+
+/** Copy every pin's named-capability array into one block and point the (already copied) pins at it. The strings
+ *  themselves are the application's. */
+static esp_err_t copy_named(tmx_server_t *s)
+{
+    size_t total = 0;
+    for (size_t i = 0; i < s->profile.n_pins; i++) {
+        if (s->pins[i].n_named && !s->pins[i].named) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        total += s->pins[i].n_named;
+    }
+    if (total == 0) {
+        return ESP_OK;
+    }
+    s->named = malloc(total * sizeof(*s->named));
+    if (!s->named) {
+        return ESP_ERR_NO_MEM;
+    }
+    const char **next = s->named;
+    for (size_t i = 0; i < s->profile.n_pins; i++) {
+        telemetrix_pin_t *pin = &s->pins[i];
+        if (pin->n_named) {
+            memcpy(next, pin->named, pin->n_named * sizeof(*next));
+            pin->named = next;
+            next += pin->n_named;
+        }
+    }
+    return ESP_OK;
 }
 
 esp_err_t tmx_server_new(const telemetrix_profile_t *profile, const telemetrix_config_t *config,
@@ -133,9 +176,15 @@ esp_err_t tmx_server_new(const telemetrix_profile_t *profile, const telemetrix_c
     s->i2c = dup_array(profile->i2c, profile->n_i2c, sizeof(*profile->i2c));
     s->onewire = dup_array(profile->onewire, profile->n_onewire, sizeof(*profile->onewire));
     s->allowed = dup_array(config->allowed, config->n_allowed, sizeof(*config->allowed));
+    s->plugins = dup_array(config->plugins, config->n_plugins, sizeof(*config->plugins));
     if ((profile->n_pins && !s->pins) || (profile->n_adc && !s->adc) || (profile->n_i2c && !s->i2c) ||
-            (profile->n_onewire && !s->onewire) || (config->n_allowed && !s->allowed)) {
+            (profile->n_onewire && !s->onewire) || (config->n_allowed && !s->allowed) ||
+            (config->n_plugins && !s->plugins)) {
         err = ESP_ERR_NO_MEM;
+        goto fail;
+    }
+    err = copy_named(s);
+    if (err != ESP_OK) {
         goto fail;
     }
     s->profile.pins = s->pins;
@@ -143,6 +192,7 @@ esp_err_t tmx_server_new(const telemetrix_profile_t *profile, const telemetrix_c
     s->profile.i2c = s->i2c;
     s->profile.onewire = s->onewire;
     s->cfg.allowed = s->allowed;
+    s->cfg.plugins = s->plugins;
 
     err = tmx_conn_init(&s->conn, s->cfg.send_queue_bytes);
     if (err != ESP_OK) {
@@ -154,7 +204,9 @@ esp_err_t tmx_server_new(const telemetrix_profile_t *profile, const telemetrix_c
     }
     s->drv = tmx_drv_default;           /* from here on free() calls deinit */
     tmx_completion_reset();
-    err = tmx_adapter_init(&s->adapter, &s->profile, &s->cfg, s->drv, emit, s);   /* every pin to its safe state */
+    tmx_emit_ring_reset();              /* closed until a client enters extended mode */
+    /* registers the plugins and checks the pins' named capabilities against them, then every pin to its safe state */
+    err = tmx_adapter_init(&s->adapter, &s->profile, &s->cfg, s->drv, emit, s);
     if (err != ESP_OK) {
         goto fail;
     }
@@ -164,6 +216,7 @@ esp_err_t tmx_server_new(const telemetrix_profile_t *profile, const telemetrix_c
         goto fail;
     }
     tmx_completion_set_wake(tmx_net_wake);
+    tmx_emit_ring_set_wake(tmx_net_wake);
     if (s->cfg.server_enabled) {
         s->listener = tmx_sock_listen(s->cfg.port);
         if (s->listener < 0 || s->listener >= FD_SETSIZE) {

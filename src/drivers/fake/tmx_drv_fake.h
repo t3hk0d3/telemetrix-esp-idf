@@ -34,6 +34,10 @@ size_t tmx_fake_rmt_rx_live(void);
 /** True while the echo handler of a sonar_start is attached (until release or deinit). */
 bool tmx_fake_sonar_handler(void);
 
+/** micros: with step 0 (the default, also after tmx_fake_reset) the real monotonic clock; otherwise every call
+ *  advances a counter by step and returns it. */
+void tmx_fake_set_micros_step(uint32_t us);
+
 /** True once a call was left out of the log because it was full (cleared by tmx_fake_reset). */
 bool tmx_fake_log_truncated(void);
 

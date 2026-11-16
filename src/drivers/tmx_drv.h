@@ -42,6 +42,8 @@ typedef struct {
     esp_err_t (*dht_start)(uint8_t gpio, uint32_t token);
     esp_err_t (*sonar_start)(uint8_t trig, uint8_t echo, uint32_t token);
     void (*release)(void);
+    /** A free-running microsecond clock (plugin time budget). */
+    uint64_t (*micros)(void);
     esp_err_t (*init)(const telemetrix_profile_t *p);
     void (*deinit)(void);
 } tmx_drv_t;

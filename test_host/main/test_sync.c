@@ -392,11 +392,11 @@ TEST_CASE("a skipped PLUGIN [3, 4]: ERROR [seq, 60, SKIPPED, 3, 4]", "[sync]")
     fx_assert_report(1, e, sizeof(e));
 }
 
-TEST_CASE("a PLUGIN command refused as NOT_IN_SCOPE: ERROR carries [slot, sub]", "[sync]")
+TEST_CASE("a PLUGIN command refused as NO_SUCH_SLOT: ERROR carries [slot, sub]", "[sync]")
 {
     start_ext();
     FX_SEND(TMX_CMD_PLUGIN, 0, 3, 4);
-    const uint8_t e[] = {7, TMX_RPT_ERROR, 0, 0, TMX_CMD_PLUGIN, TELEMETRIX_REASON_NOT_IN_SCOPE, 3, 4};
+    const uint8_t e[] = {7, TMX_RPT_ERROR, 0, 0, TMX_CMD_PLUGIN, TELEMETRIX_REASON_NO_SUCH_SLOT, 3, 4};
     fx_assert_report(0, e, sizeof(e));
 }
 

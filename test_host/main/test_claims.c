@@ -278,3 +278,125 @@ TEST_CASE("On a driver error configuring the timer: the error is returned and no
     tmx_claims_release_all(&c);
     TEST_ASSERT_EQUAL_STRING("ledc_stop(0,0)\nledc_timer_free(0,0)\n", tmx_fake_calls());
 }
+
+/* ---- named capabilities and RMT TX (M2) ---- */
+
+static const char *const led_named[] = {"x.led"};
+
+/** gpio 2 grants x.led and rests driven low; gpio 4 grants nothing named. */
+static telemetrix_pin_t npins[2];
+
+static telemetrix_profile_t named_profile(void)
+{
+    npins[0] = pins[0];
+    npins[0].named = led_named;
+    npins[0].n_named = 1;
+    npins[1] = pins[1];
+    telemetrix_profile_t p = profile();
+    p.pins = npins;
+    p.n_pins = 2;
+    p.n_i2c = 0;
+    p.rmt.tx_channels = 2;
+    return p;
+}
+
+TEST_CASE("tmx_claim_named on a pin whose profile entry grants the name: claimed for that plugin", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_named(&c, 2, "x.led", 3));
+    TEST_ASSERT_EQUAL(TMX_USE_PLUGIN, tmx_pin_use(&c, 2));
+    TEST_ASSERT_EQUAL(3, tmx_pin_owner(&c, 2));
+    TEST_ASSERT_EQUAL_STRING("", tmx_fake_calls());
+}
+
+TEST_CASE("tmx_claim_named again by the same plugin: ESP_OK", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_named(&c, 2, "x.led", 3));
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_named(&c, 2, "x.led", 3));
+}
+
+TEST_CASE("tmx_claim_named on a pin without the name or not in the profile: ESP_ERR_NOT_SUPPORTED", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, tmx_claim_named(&c, 4, "x.led", 0));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, tmx_claim_named(&c, 2, "x.horn", 0));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, tmx_claim_named(&c, 40, "x.led", 0));
+    TEST_ASSERT_EQUAL(TMX_USE_NONE, tmx_pin_use(&c, 2));
+}
+
+TEST_CASE("tmx_claim_named on a pin claimed by another use or another plugin: ESP_ERR_INVALID_STATE", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_pin(&c, 2, TMX_USE_OUTPUT));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, tmx_claim_named(&c, 2, "x.led", 0));
+    tmx_release_pin(&c, 2);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_named(&c, 2, "x.led", 0));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, tmx_claim_named(&c, 2, "x.led", 1));
+    TEST_ASSERT_EQUAL(0, tmx_pin_owner(&c, 2));
+}
+
+TEST_CASE("tmx_claim_pin on a plugin's pin: ESP_ERR_INVALID_STATE", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_named(&c, 2, "x.led", 0));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, tmx_claim_pin(&c, 2, TMX_USE_OUTPUT));
+}
+
+TEST_CASE("tmx_pin_owner of a pin not held by a plugin: -1", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_pin(&c, 4, TMX_USE_OUTPUT));
+    TEST_ASSERT_EQUAL(-1, tmx_pin_owner(&c, 4));
+    TEST_ASSERT_EQUAL(-1, tmx_pin_owner(&c, 2));
+}
+
+TEST_CASE("tmx_release_all with a plugin's pin: the pin back in its safe state and free", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_named(&c, 2, "x.led", 0));
+    tmx_claims_release_all(&c);
+    TEST_ASSERT_EQUAL_STRING("gpio_output(2,0)\n", tmx_fake_calls());
+    TEST_ASSERT_EQUAL(TMX_USE_NONE, tmx_pin_use(&c, 2));
+    TEST_ASSERT_EQUAL(-1, tmx_pin_owner(&c, 2));
+}
+
+TEST_CASE("tmx_claim_rmt_tx on more TX claims than tx_channels: ESP_ERR_NOT_FOUND", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_rmt_tx(&c));
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_rmt_tx(&c));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, tmx_claim_rmt_tx(&c));
+    TEST_ASSERT_EQUAL(2, c.rmt_tx_used);
+}
+
+TEST_CASE("tmx_release_rmt_tx: the channel can be claimed again; release_all forgets every TX claim", "[claims]")
+{
+    telemetrix_profile_t p = named_profile();
+    tmx_claims_t c;
+    start(&c, &p);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_rmt_tx(&c));
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_rmt_tx(&c));
+    tmx_release_rmt_tx(&c);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_claim_rmt_tx(&c));
+    tmx_claims_release_all(&c);
+    TEST_ASSERT_EQUAL(0, c.rmt_tx_used);
+    tmx_release_rmt_tx(&c);
+    TEST_ASSERT_EQUAL(0, c.rmt_tx_used);
+}

@@ -33,6 +33,11 @@
 #else
 #define ONE_WIRE_ENABLED false
 #endif
+#ifdef CONFIG_TELEMETRIX_EXTENDED
+#define EXTENDED_ENABLED true
+#else
+#define EXTENDED_ENABLED false
+#endif
 
 int tmx_adapter_pin_index(const tmx_adapter_t *a, uint8_t gpio)
 {
@@ -153,7 +158,20 @@ esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, cons
     if (p->n_i2c > TMX_MAX_BUSES || p->n_onewire > TMX_MAX_BUSES) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (cfg->n_plugins && !EXTENDED_ENABLED) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     memset(a, 0, sizeof(*a));
+    esp_err_t err = tmx_plugins_init(&a->plugins, cfg->plugins, cfg->n_plugins);
+    if (err == ESP_OK) {
+        err = tmx_profile_validate_named(p, a->plugins.named, a->plugins.n_named);
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    for (size_t i = 0; i < a->plugins.n; i++) {
+        a->plugins.ctx[i].adapter = a;
+    }
     a->profile = p;
     a->cfg = *cfg;
     a->drv = drv;
@@ -167,6 +185,7 @@ esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, cons
 
 void tmx_adapter_release(tmx_adapter_t *a)
 {
+    tmx_adapter_plugins_release(a);     /* first: a plugin can still drive its pins to a clean state */
     tmx_i2c_release(a);         /* buses closed and devices dropped before their pins and RMT claims go */
     tmx_onewire_release(a);
     tmx_sensors_release(a);
@@ -237,8 +256,10 @@ uint32_t tmx_adapter_poll(tmx_adapter_t *a, uint32_t now_ms)
     uint32_t next = tmx_deadline_left(&a->digital.scan, now_ms);
     uint32_t analog = tmx_deadline_left(&a->analog.scan, now_ms);
     uint32_t sensors = tmx_sensors_left(a, now_ms);
+    uint32_t plugins = tmx_adapter_plugins_poll(a, now_ms);
     next = analog < next ? analog : next;
-    return sensors < next ? sensors : next;
+    next = sensors < next ? sensors : next;
+    return plugins < next ? plugins : next;
 }
 
 static bool known_mode(uint8_t mode)

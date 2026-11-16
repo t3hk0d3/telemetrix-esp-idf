@@ -213,3 +213,67 @@ TEST_CASE("On a GPIO not in the profile (40, 255): returns NULL", "[profile]")
     TEST_ASSERT_NULL(tmx_profile_pin(&p, 40));
     TEST_ASSERT_NULL(tmx_profile_pin(&p, 255));
 }
+
+/* ---- named capabilities ---- */
+
+static const char *const led_only[] = {"x.led"};
+static const char *const led_and_horn[] = {"x.led", "x.horn"};
+
+/** pins with gpio 2 naming the given capabilities */
+static telemetrix_pin_t named_pins[2];
+
+static telemetrix_profile_t with_named(const char *const *named, uint8_t n)
+{
+    named_pins[0] = pins[0];
+    named_pins[1] = pins[1];
+    named_pins[0].named = named;
+    named_pins[0].n_named = n;
+    return (telemetrix_profile_t) {
+        .pins = named_pins, .n_pins = 2, .ledc = {.timer_mask = 0x0f, .channel_mask = 0x0f}
+    };
+}
+
+TEST_CASE("tmx_profile_validate_named on pins naming declared capabilities: ESP_OK", "[profile]")
+{
+    telemetrix_profile_t p = with_named(led_and_horn, 2);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate_named(&p, led_and_horn, 2));
+}
+
+TEST_CASE("tmx_profile_validate_named on pins naming nothing: ESP_OK with no names", "[profile]")
+{
+    telemetrix_profile_t p = valid();
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate_named(&p, NULL, 0));
+}
+
+TEST_CASE("tmx_profile_validate_named on a pin naming a capability no plugin declares: ESP_ERR_INVALID_ARG",
+          "[profile]")
+{
+    telemetrix_profile_t p = with_named(led_and_horn, 2);
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate_named(&p, led_only, 1));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate_named(&p, NULL, 0));
+}
+
+TEST_CASE("tmx_profile_validate_named on a pin with n_named but no array: ESP_ERR_INVALID_ARG", "[profile]")
+{
+    telemetrix_profile_t p = with_named(NULL, 1);
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate_named(&p, led_only, 1));
+}
+
+TEST_CASE("tmx_profile_validate_named on more than 16 names: ESP_ERR_INVALID_ARG", "[profile]")
+{
+    static const char *const many[17] = {
+        "x.led", "n.1", "n.2", "n.3", "n.4", "n.5", "n.6", "n.7", "n.8", "n.9", "n.10", "n.11", "n.12", "n.13",
+        "n.14", "n.15", "n.16",
+    };
+    telemetrix_profile_t p = with_named(led_only, 1);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate_named(&p, many, 16));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate_named(&p, many, 17));
+}
+
+TEST_CASE("tmx_profile_validate_named on a name over 24 bytes: ESP_ERR_INVALID_ARG", "[profile]")
+{
+    static const char *const names[] = {"x.led", "abcdefghijkl.mnopqrstuvwx"};
+    telemetrix_profile_t p = with_named(led_only, 1);
+    TEST_ASSERT_EQUAL(ESP_OK, tmx_profile_validate_named(&p, names, 1));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, tmx_profile_validate_named(&p, names, 2));
+}

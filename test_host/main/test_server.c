@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "fake/tmx_drv_fake.h"
+#include "test_plugin.h"
 #include "tmx_adapter.h"
 #include "unity.h"
 
@@ -430,5 +431,72 @@ TEST_CASE("a client that disconnects inside a packet: the partial packet counts 
     telemetrix_status_t st;
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
     TEST_ASSERT_EQUAL_UINT32(1, st.dropped_packets);
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+/* ---- plugins ---- */
+
+TEST_CASE("telemetrix_start with a pin naming a capability no plugin declares: ESP_ERR_INVALID_ARG, nothing started",
+          "[server]")
+{
+    static const char *const unknown[] = {"nobody.declares"};
+    static const telemetrix_plugin_t *const list[] = {&test_plugin_echo};
+    telemetrix_pin_t named[2] = {pins[0], pins[1]};
+    named[1].named = unknown;
+    named[1].n_named = 1;
+    telemetrix_profile_t p = {.pins = named, .n_pins = 2};
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.plugins = list;
+    cfg.n_plugins = 1;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, telemetrix_start(&p, &cfg, NULL));
+    telemetrix_status_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
+    TEST_ASSERT_FALSE(st.running);
+}
+
+TEST_CASE("telemetrix_start with plugins: the plugin array and the pins' named arrays are copied", "[server]")
+{
+    const char *named_caps[] = {"test.led"};
+    const telemetrix_plugin_t *list[] = {&test_plugin_echo};
+    telemetrix_pin_t named[2] = {pins[0], pins[1]};
+    named[1].named = named_caps;
+    named[1].n_named = 1;
+    telemetrix_profile_t p = {.pins = named, .n_pins = 2};
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.plugins = list;
+    cfg.n_plugins = 1;
+    test_plugin_reset();
+    tmx_fake_reset();
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_start(&p, &cfg, NULL));
+    list[0] = NULL;                                    /* the copies must not follow the caller's arrays */
+    named_caps[0] = "gone.away";
+    named[1].named = NULL;
+
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    const uint8_t hello[] = {4, TMX_CMD_GET_FIRMWARE_VERSION, TMX_EXT_MAGIC, 1, 0};
+    TEST_ASSERT_EQUAL(sizeof(hello), send(c, hello, sizeof(hello), 0));
+    uint8_t answer[8];
+    TEST_ASSERT_EQUAL(0, read_n(c, answer, sizeof(answer)));
+    const uint8_t cmds[] = {
+        4, TMX_CMD_PLUGIN, 0, 0, 0x42,                 /* echo */
+        4, TMX_CMD_PLUGIN, 0, 3, 4,                    /* claim gpio 4 as test.led and drive it */
+        2, TMX_CMD_LOOP_COMMAND, 0x5a,
+    };
+    TEST_ASSERT_EQUAL(sizeof(cmds), send(c, cmds, sizeof(cmds), 0));
+    const uint8_t want[] = {4, TMX_RPT_PLUGIN_REPORT, 0, 0, 0x42, 2, 0, 0x5a};
+    uint8_t got[sizeof(want)];
+    TEST_ASSERT_EQUAL(0, read_n(c, got, sizeof(got)));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, got, sizeof(want));
+    TEST_ASSERT_TRUE(calls_have("gpio_output(4,1)"));
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
+    TEST_ASSERT_EQUAL(1, test_plugin_releases());
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
 }

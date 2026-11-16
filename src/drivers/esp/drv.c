@@ -1,6 +1,13 @@
+#include "esp_timer.h"
+
 #include "tmx_drv_esp.h"
 
 /* Chip driver table: GPIO, LEDC, ADC, I2C, 1-wire and the DHT and sonar measurements (drv_*.c). */
+
+static uint64_t n_micros(void)
+{
+    return (uint64_t)esp_timer_get_time();
+}
 
 static esp_err_t n_init(const telemetrix_profile_t *p)
 {
@@ -44,6 +51,7 @@ const tmx_drv_t tmx_drv_esp = {
     .dht_start = esp_dht_start,
     .sonar_start = esp_sonar_start,
     .release = esp_pulse_release,
+    .micros = n_micros,
     .init = n_init,
     .deinit = n_deinit,
 };

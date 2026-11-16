@@ -115,11 +115,14 @@ struct tmx_adapter {
     tmx_onewire_t onewire;
     tmx_sensors_t sensors;
     tmx_session_t session;
+    tmx_plugins_t plugins;
 };
 typedef struct tmx_adapter tmx_adapter_t;
 
-/** Bind the adapter to a profile (which must outlive it), a driver and a report sink, and put every profile pin in its
- *  safe state. cfg is copied. ESP_ERR_INVALID_ARG for a NULL argument or a profile over 64 pins. */
+/** Bind the adapter to a profile (which must outlive it), a driver and a report sink, register cfg's plugins and put
+ *  every profile pin in its safe state. cfg is copied (the plugins must outlive the adapter, their array need not).
+ *  ESP_ERR_INVALID_ARG for a NULL argument, a profile over 64 pins, a plugin list tmx_plugins_init refuses or a pin
+ *  naming a capability no plugin declares; ESP_ERR_NOT_SUPPORTED for plugins without CONFIG_TELEMETRIX_EXTENDED. */
 esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, const telemetrix_config_t *cfg,
                            const tmx_drv_t *drv, tmx_emit_fn emit, void *ctx);
 /** The stock dispatch: length check, switched-off check, the command. Returns why it was refused, NONE when done.
@@ -135,13 +138,15 @@ telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint
  *  I2C read nobody answered; those two are not counted as refused).
  *  Extended mode: ids above 60 are a violation (nothing runs, nothing is queued); any other packet is numbered and,
  *  unless a refusal earlier in the batch skips it, dispatched; a refusal is exactly one ERROR report queued as a
- *  reply, counted in error_reports (and refused_commands, except NOT_IN_SCOPE). Ids 57-60 are NOT_IN_SCOPE until
- *  their handlers land. */
+ *  reply, counted in error_reports (and refused_commands, except NOT_IN_SCOPE). PLUGIN (60) goes to the plugin in its
+ *  slot, whose PLUGIN refusal adds its code to the ERROR; id 59 is NOT_IN_SCOPE until its handler lands. */
 void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms);
-/** Run the scans that are due and return the milliseconds until the next deadline, UINT32_MAX when none. */
+/** Run the scans that are due and, during an extended session, the plugin poll hooks that are due or woken (timed
+ *  against cfg.plugin_budget_us); return the milliseconds until the next deadline, UINT32_MAX when none. */
 uint32_t tmx_adapter_poll(tmx_adapter_t *a, uint32_t now_ms);
-/** Close the buses, forget the sensors, let the driver free its session resources (release), then release every claim
- *  (LEDC first, then safe states), clear the tables, enable reporting, default analog interval. */
+/** Run the plugin release hooks in slot order, then close the buses, forget the sensors, let the driver free its session
+ *  resources (release), then release every claim (LEDC first, then safe states), clear the tables, enable reporting,
+ *  default analog interval. The plugins' next poll comes at once. */
 void tmx_adapter_release(tmx_adapter_t *a);
 /** release plus the session back to stock mode (seq 0, abort on, no violation): a client is gone. RESET uses
  *  tmx_adapter_release only: a session stays extended. */
@@ -226,6 +231,15 @@ void tmx_i2c_release(tmx_adapter_t *a);
 telemetrix_reason_t tmx_onewire_command(tmx_adapter_t *a, uint8_t bus, uint8_t id, const uint8_t *p, size_t len);
 /** Close every open bus. */
 void tmx_onewire_release(tmx_adapter_t *a);
+
+/* plugin_api.c */
+/** PLUGIN [slot, sub, args...]: the plugin's command, timed and counted. BAD_ARGUMENT under 2 bytes, NO_SUCH_SLOT for
+ *  an empty slot; *code is set when the result is PLUGIN. */
+telemetrix_reason_t tmx_adapter_plugin_command(tmx_adapter_t *a, const uint8_t *payload, size_t len, uint8_t *code);
+/** The poll hooks that are due or woken, during an extended session only; ms until the next one, UINT32_MAX = none. */
+uint32_t tmx_adapter_plugins_poll(tmx_adapter_t *a, uint32_t now_ms);
+/** The release hooks in slot order; every plugin's RMT holdings forgotten and its next poll due at once. */
+void tmx_adapter_plugins_release(tmx_adapter_t *a);
 
 /* sensors.c */
 telemetrix_reason_t tmx_sonar_new(tmx_adapter_t *a, uint8_t trig, uint8_t echo, uint32_t now_ms);

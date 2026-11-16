@@ -120,3 +120,14 @@ TEST_CASE("Extended off: the handshake probe gets the stock answer and the sessi
     TEST_ASSERT_FALSE(tmx_adapter_extended(&fx_a));
     TEST_ASSERT_FALSE(tmx_adapter_mode_changed(&fx_a));
 }
+
+static const telemetrix_plugin_t idle_plugin = {.name = "test.idle", .major = 1, .minor = 0};
+
+TEST_CASE("Extended off: an adapter given plugins refuses with ESP_ERR_NOT_SUPPORTED", "[features_off]")
+{
+    static const telemetrix_plugin_t *const list[] = {&idle_plugin};
+    start();
+    fx_cfg.plugins = list;
+    fx_cfg.n_plugins = 1;
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, tmx_adapter_init(&fx_a, &fx_profile, &fx_cfg, &tmx_drv_fake, fx_emit, NULL));
+}

@@ -52,13 +52,16 @@ static void emit_long_answer(tmx_adapter_t *a)
     a->emit(out, n, true, TMX_COALESCE_NONE, 0, a->ctx);
 }
 
-/** An ERROR report; a PLUGIN command whose payload has [slot, sub] names them in the report. */
+/** An ERROR report; a PLUGIN command whose payload has [slot, sub] names them in the report, and the plugin's own code
+ *  follows when it refused with PLUGIN. */
 static void emit_error(tmx_adapter_t *a, uint16_t seq, uint8_t cmd, telemetrix_reason_t why, const uint8_t *payload,
-                       size_t len)
+                       size_t len, uint8_t code)
 {
     uint8_t out[TMX_EXT_REPORT_MAX];
     const bool named = cmd == TMX_CMD_PLUGIN && len >= 2;
-    size_t n = tmx_rpt_error(out, seq, cmd, (uint8_t)why, named ? payload[0] : -1, named ? payload[1] : 0, -1);
+    const bool coded = named && why == TELEMETRIX_REASON_PLUGIN;
+    size_t n = tmx_rpt_error(out, seq, cmd, (uint8_t)why, named ? payload[0] : -1, named ? payload[1] : 0,
+                             coded ? code : -1);
     a->emit(out, n, true, TMX_COALESCE_NONE, 0, a->ctx);
     a->session.error_reports++;
 }
@@ -151,9 +154,10 @@ static telemetrix_reason_t on_bus_command(tmx_adapter_t *a, const uint8_t *paylo
     return why;
 }
 
-/** The ids 57-60 and every stock id; the packet has a number and is not skipped. */
+/** The ids 57-60 and every stock id; the packet has a number and is not skipped. *code is the plugin's own code when
+ *  a PLUGIN command is refused with PLUGIN. */
 static telemetrix_reason_t extended_command(tmx_adapter_t *a, uint16_t seq, uint8_t id, const uint8_t *payload,
-                                            size_t len, uint32_t now_ms)
+                                            size_t len, uint32_t now_ms, uint8_t *code)
 {
     switch (id) {
     case TMX_CMD_GET_FIRMWARE_VERSION:
@@ -163,9 +167,10 @@ static telemetrix_reason_t extended_command(tmx_adapter_t *a, uint16_t seq, uint
         return sync_command(a, seq, payload, len);
     case TMX_CMD_ON_BUS:
         return on_bus_command(a, payload, len);
-    case TMX_CMD_GET_CAPABILITIES:
     case TMX_CMD_PLUGIN:
-        return TELEMETRIX_REASON_NOT_IN_SCOPE;      /* placeholder: the handlers of 59 and 60 replace this */
+        return tmx_adapter_plugin_command(a, payload, len, code);
+    case TMX_CMD_GET_CAPABILITIES:
+        return TELEMETRIX_REASON_NOT_IN_SCOPE;      /* placeholder: the handler of 59 replaces this */
     default:
         return tmx_adapter_command(a, id, payload, len, now_ms);
     }
@@ -179,13 +184,14 @@ static void extended_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload
     }
     uint16_t seq = a->session.seq++;
     telemetrix_reason_t why = TELEMETRIX_REASON_SKIPPED;
+    uint8_t code = 0;
     if (!a->session.skipping || id == TMX_CMD_SYNC) {
-        why = extended_command(a, seq, id, payload, len, now_ms);
+        why = extended_command(a, seq, id, payload, len, now_ms, &code);
     }
     if (why == TELEMETRIX_REASON_NONE) {
         return;
     }
-    emit_error(a, seq, id, why, payload, len);
+    emit_error(a, seq, id, why, payload, len, code);
     if (why != TELEMETRIX_REASON_NOT_IN_SCOPE && why != TELEMETRIX_REASON_SKIPPED) {
         a->refused_commands++;
     }

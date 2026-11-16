@@ -105,6 +105,38 @@ int tmx_wake_fd(void);
 void tmx_wake_drain(void);
 void tmx_wake_close(void);
 
+/* ---- Plugin emit ring (emit_ring.c): telemetrix_plugin_emit_async and telemetrix_plugin_wake live there ---- */
+
+#define TMX_EMIT_RING_ENTRIES 8
+#define TMX_EMIT_DATA_MAX 251
+
+struct tmx_adapter;
+
+typedef struct {
+    uint32_t generation;
+    uint8_t slot, sub;
+    uint8_t n;
+    uint8_t data[TMX_EMIT_DATA_MAX];
+} tmx_emit_entry_t;
+
+/** Empty the ring, closed (puts refused), no wake function. Creates the lock on the first call. Not concurrent with
+ *  puts: call before any plugin can run (server start). */
+void tmx_emit_ring_reset(void);
+/** Called after a put and by telemetrix_plugin_wake; NULL = none. tmx_net_wake on a server. */
+void tmx_emit_ring_set_wake(void (*fn)(void));
+/** A new session generation: entries queued before are dropped; open = puts accepted (a client in extended mode).
+ *  Lock-free, so the network task never waits for it. */
+void tmx_emit_ring_bump(bool open);
+/** Queue an entry of the current generation (waits at most 10 ms for the lock). ESP_ERR_INVALID_STATE while closed,
+ *  ESP_ERR_NO_MEM when 8 entries of this generation wait, ESP_ERR_TIMEOUT, ESP_ERR_INVALID_ARG for n over 251. */
+esp_err_t tmx_emit_ring_put(uint8_t slot, uint8_t sub, const uint8_t *data, size_t n);
+/** The oldest entry of the current generation; older ones are dropped on the way. False when none (or the lock was
+ *  busy). */
+bool tmx_emit_ring_take(tmx_emit_entry_t *out);
+/** Network task: emit every queued entry of the current generation as PLUGIN_REPORT through the adapter's sink (as
+ *  replies), while the adapter is in extended mode; older entries are dropped. */
+void tmx_emit_ring_drain(struct tmx_adapter *a);
+
 /* ---- Server (net.c, api.c) ---- */
 
 typedef struct tmx_server tmx_server_t;

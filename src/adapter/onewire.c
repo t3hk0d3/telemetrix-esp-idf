@@ -35,7 +35,13 @@ static telemetrix_reason_t init(tmx_adapter_t *a, int idx, const uint8_t *p)
         tmx_release_pin(&a->claims, (uint8_t)gpio);
         return TELEMETRIX_REASON_EXHAUSTED;
     }
+    if (tmx_claim_rmt_tx(&a->claims) != ESP_OK) {   /* the bus drives through a TX channel too, shared with plugins */
+        tmx_release_rmt_rx(&a->claims);
+        tmx_release_pin(&a->claims, (uint8_t)gpio);
+        return TELEMETRIX_REASON_EXHAUSTED;
+    }
     if (a->drv->ow_open(grant->bus, (uint8_t)gpio) != ESP_OK) {
+        tmx_release_rmt_tx(&a->claims);
         tmx_release_rmt_rx(&a->claims);
         tmx_release_pin(&a->claims, (uint8_t)gpio);
         return TELEMETRIX_REASON_HARDWARE;

@@ -120,3 +120,13 @@ TEST_CASE("telemetrix_cidr_parse of NULL arguments: ESP_ERR_INVALID_ARG", "[cfg]
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, telemetrix_cidr_parse(NULL, &c));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, telemetrix_cidr_parse("1.2.3.4", NULL));
 }
+
+TEST_CASE("telemetrix_config_default: plugin budget 5000 us and no plugins", "[cfg]")
+{
+    telemetrix_config_t c;
+    memset(&c, 0xa5, sizeof(c));
+    telemetrix_config_default(&c);
+    TEST_ASSERT_EQUAL_UINT32(5000, c.plugin_budget_us);
+    TEST_ASSERT_NULL(c.plugins);
+    TEST_ASSERT_EQUAL(0, c.n_plugins);
+}

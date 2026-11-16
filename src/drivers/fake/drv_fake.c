@@ -2,6 +2,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "tmx_core.h"
 #include "tmx_drv_fake.h"
@@ -54,6 +55,8 @@ typedef struct {
         esp_err_t err;
         bool pending;
     } fail[FAKE_FAILS];
+    uint32_t micros_step;   /**< 0 = the real monotonic clock */
+    uint64_t micros_now;
 } fake_t;
 
 static fake_t fake;
@@ -501,6 +504,22 @@ static void f_release(void)
     fake.sonar_handler = false;
 }
 
+static uint64_t f_micros(void)
+{
+    if (fake.micros_step == 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+    }
+    fake.micros_now += fake.micros_step;
+    return fake.micros_now;
+}
+
+void tmx_fake_set_micros_step(uint32_t us)
+{
+    fake.micros_step = us;
+}
+
 static esp_err_t f_init(const telemetrix_profile_t *p)
 {
     (void)p;
@@ -545,6 +564,7 @@ const tmx_drv_t tmx_drv_fake = {
     .dht_start = f_dht_start,
     .sonar_start = f_sonar_start,
     .release = f_release,
+    .micros = f_micros,
     .init = f_init,
     .deinit = f_deinit,
 };

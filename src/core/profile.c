@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "tmx_core.h"
 
 #define CAP_ALL 0xFFu
@@ -103,6 +105,40 @@ esp_err_t tmx_profile_validate(const telemetrix_profile_t *p)
         return ESP_ERR_INVALID_ARG;
     }
     return validate_buses(p);
+}
+
+static bool name_listed(const char *name, const char *const *names, size_t n)
+{
+    for (size_t i = 0; name && i < n; i++) {
+        if (strcmp(names[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+esp_err_t tmx_profile_validate_named(const telemetrix_profile_t *p, const char *const *names, size_t n)
+{
+    if (!p || n > TMX_NAMED_MAX || (n && !names)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!names[i] || strnlen(names[i], TMX_NAMED_NAME_MAX + 1) > TMX_NAMED_NAME_MAX) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    for (size_t i = 0; i < p->n_pins; i++) {
+        const telemetrix_pin_t *pin = &p->pins[i];
+        if (pin->n_named && !pin->named) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        for (size_t j = 0; j < pin->n_named; j++) {
+            if (!name_listed(pin->named[j], names, n)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+        }
+    }
+    return ESP_OK;
 }
 
 const telemetrix_pin_t *tmx_profile_pin(const telemetrix_profile_t *p, uint8_t gpio)
