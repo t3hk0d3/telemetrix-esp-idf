@@ -9,7 +9,7 @@ IDF_EXPORT ?= $(HOME)/esp/esp-idf-v6.1/export.sh
 
 IDF := $(if $(shell command -v idf.py),,. "$(IDF_EXPORT)" >/dev/null &&)
 
-.PHONY: help lint test-host fuzz host-server test-integration build-examples
+.PHONY: help lint test-host fuzz host-server test-integration build-examples client-lint client-test client-integration
 
 help: ## List the targets
 	@awk -F':.*## ' '/^[a-z0-9-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -48,6 +48,15 @@ $(VENV)/.installed: tools/compat/requirements.txt
 
 test-integration: host-server $(VENV)/.installed ## pytest integration tests against the host server
 	$(VENV)/bin/python -m pytest tools/tests
+
+client-lint: ## ruff format check and ruff check on client/ (not yet)
+	@echo "client-lint: not yet"
+
+client-test: ## Client unit tests (not yet)
+	@echo "client-test: not yet"
+
+client-integration: ## Client integration tests against the host server (not yet)
+	@echo "client-integration: not yet"
 
 # One build per line: example, target, build directory suffix, SDKCONFIG_DEFAULTS (empty = the example's own default).
 define build_example

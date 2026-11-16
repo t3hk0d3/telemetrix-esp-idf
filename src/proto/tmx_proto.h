@@ -66,6 +66,13 @@
 #define TMX_CMD_STEPPER_GET_DISTANCE_TO_GO 55
 #define TMX_CMD_STEPPER_GET_TARGET_POSITION 56
 
+/* Extended-mode command ids (this server's extension protocol). */
+#define TMX_CMD_SYNC 57
+#define TMX_CMD_ON_BUS 58
+#define TMX_CMD_GET_CAPABILITIES 59
+#define TMX_CMD_PLUGIN 60
+#define TMX_CMD_EXT_LAST 60
+
 /* Report ids sent to the client. */
 #define TMX_RPT_DIGITAL_REPORT 2
 #define TMX_RPT_ANALOG_REPORT 3
@@ -85,6 +92,20 @@
 #define TMX_RPT_STEPPER_RUNNING_REPORT 18
 #define TMX_RPT_STEPPER_RUN_COMPLETE_REPORT 19
 #define TMX_RPT_DEBUG_PRINT 99
+
+/* Extended-mode report ids. */
+#define TMX_RPT_ERROR 57
+#define TMX_RPT_SYNC_REPLY 58
+#define TMX_RPT_BUS_REPORT 59
+#define TMX_RPT_CAPABILITIES 60
+#define TMX_RPT_PLUGIN_REPORT 61
+
+/* Extension handshake: magic byte and protocol version, payload and report caps in extended mode. */
+#define TMX_EXT_MAGIC 0xA7
+#define TMX_EXT_MAJOR 1
+#define TMX_EXT_MINOR 0
+#define TMX_EXT_PAYLOAD_MAX 254
+#define TMX_EXT_REPORT_MAX 256
 
 /* SET_PIN_MODE modes. */
 #define TMX_MODE_INPUT 0
@@ -110,6 +131,8 @@ typedef struct {
     uint32_t started_ms;  /**< time the first byte of the current packet or skip arrived */
     uint32_t dropped;     /**< len 0, oversized and timed-out packets */
     uint16_t cap;         /**< payload cap: len above cap + 1 is skipped */
+    bool strict;          /**< extended mode: len 0 and a timed-out packet are violations */
+    bool violation;       /**< a violation was seen; feed consumes nothing until the next init */
 } tmx_frame_t;
 
 /** Reset the assembler; payload_cap is 30 in stock mode (clamped to 254). dropped restarts at 0. */
@@ -121,6 +144,11 @@ void tmx_frame_feed(tmx_frame_t *f, const uint8_t *data, size_t n, uint32_t now_
 void tmx_frame_tick(tmx_frame_t *f, uint32_t now_ms);
 /** The connection ended: drop an unfinished packet and count it; an unfinished skip is forgotten (already counted). */
 void tmx_frame_abandon(tmx_frame_t *f);
+/** Change the payload cap (clamped to 254) and strictness. Takes effect at the next length byte; callable from inside
+ *  the packet callback. */
+void tmx_frame_set_mode(tmx_frame_t *f, uint16_t payload_cap, bool strict);
+/** Stop parsing: sets violation so feed returns without emitting the rest of the chunk. Callable from the callback. */
+void tmx_frame_halt(tmx_frame_t *f);
 
 typedef enum { TMX_STOCK_OK, TMX_STOCK_SHORT, TMX_STOCK_IGNORED } tmx_stock_verdict_t;
 
@@ -148,5 +176,20 @@ size_t tmx_rpt_dht_data(uint8_t *out, uint8_t pin, float hum, float temp);
 size_t tmx_rpt_dht_error(uint8_t *out, uint8_t pin, uint8_t err);
 /** [1+1+n,14,subtype,data...]; subtype is a TMX_CMD_ONE_WIRE_* id; n is 1 (reset, read, crc8) or 8 (search). */
 size_t tmx_rpt_onewire(uint8_t *out, uint8_t subtype, const uint8_t *data, size_t n);
+
+/* Extended reports; out must hold TMX_EXT_REPORT_MAX bytes. Each returns the bytes written. */
+
+/** [7,5,3,2,100,magic,major,minor]: the stock version bytes then the server's extension version. */
+size_t tmx_rpt_firmware_long(uint8_t *out, uint8_t major, uint8_t minor);
+/** [len,57,seq_hi,seq_lo,cmd,reason], then [slot,sub] when slot >= 0, then [code] when code >= 0 (only after a slot).
+ *  The caller passes slot >= 0 exactly when cmd is TMX_CMD_PLUGIN and code >= 0 exactly when reason is PLUGIN. */
+size_t tmx_rpt_error(uint8_t *out, uint16_t seq, uint8_t cmd, uint8_t reason, int16_t slot, uint8_t sub, int16_t code);
+/** [5,58,tag_hi,tag_lo,seq_hi,seq_lo] */
+size_t tmx_rpt_sync_reply(uint8_t *out, uint16_t tag, uint16_t seq);
+/** Wrap a full stock report (length byte included) as [len,59,bus,stock_id,payload...]. Returns 0 when it does not
+ *  fit or is malformed. */
+size_t tmx_rpt_bus_wrap(uint8_t *out, uint8_t bus, const uint8_t *stock_report, size_t n);
+/** [len,61,slot,sub,data...]; returns 0 when n is above 251. */
+size_t tmx_rpt_plugin(uint8_t *out, uint8_t slot, uint8_t sub, const uint8_t *data, size_t n);
 
 #endif

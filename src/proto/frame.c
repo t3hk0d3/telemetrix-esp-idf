@@ -13,6 +13,19 @@ void tmx_frame_init(tmx_frame_t *f, uint16_t payload_cap)
     f->started_ms = 0;
     f->dropped = 0;
     f->cap = payload_cap > 254 ? 254 : payload_cap;
+    f->strict = false;
+    f->violation = false;
+}
+
+void tmx_frame_set_mode(tmx_frame_t *f, uint16_t payload_cap, bool strict)
+{
+    f->cap = payload_cap > 254 ? 254 : payload_cap;
+    f->strict = strict;
+}
+
+void tmx_frame_halt(tmx_frame_t *f)
+{
+    f->violation = true;
 }
 
 void tmx_frame_tick(tmx_frame_t *f, uint32_t now_ms)
@@ -21,6 +34,9 @@ void tmx_frame_tick(tmx_frame_t *f, uint32_t now_ms)
         f->need = 0;
         f->have = 0;
         f->dropped++;
+        if (f->strict) {
+            f->violation = true;
+        }
     } else if (f->skip > 0 && expired(f, now_ms)) {
         /* The oversized packet was counted when it began; just stop discarding. */
         f->skip = 0;
@@ -39,14 +55,20 @@ void tmx_frame_abandon(tmx_frame_t *f)
 
 void tmx_frame_feed(tmx_frame_t *f, const uint8_t *data, size_t n, uint32_t now_ms, tmx_packet_fn fn, void *ctx)
 {
+    if (f->violation) {
+        return;
+    }
     tmx_frame_tick(f, now_ms);
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < n && !f->violation; i++) {
         uint8_t b = data[i];
         if (f->skip > 0) {
             f->skip--;
         } else if (f->need == 0) {
             if (b == 0) {
                 f->dropped++;
+                if (f->strict) {
+                    f->violation = true;
+                }
             } else if (b > f->cap + 1) {
                 f->dropped++;
                 f->skip = b;    /* len counts the bytes after the len byte */

@@ -204,3 +204,118 @@ TEST_CASE("On abandon between packets or inside a skip: counts nothing more", "[
     TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
     TEST_ASSERT_EQUAL(0, f.skip);
 }
+
+typedef struct {
+    tmx_frame_t *f;
+    int count;
+    size_t lens[4];
+    bool switch_mode;
+    bool halt;
+} ext_ctx_t;
+
+static void ext_capture(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
+{
+    ext_ctx_t *c = ctx;
+    (void)id;
+    (void)payload;
+    if (c->count < 4) {
+        c->lens[c->count] = len;
+    }
+    c->count++;
+    if (c->switch_mode) {
+        tmx_frame_set_mode(c->f, TMX_EXT_PAYLOAD_MAX, true);
+    }
+    if (c->halt) {
+        tmx_frame_halt(c->f);
+    }
+}
+
+TEST_CASE("Called from inside the packet callback with cap 254, strict: the next packet may carry 254 payload bytes",
+          "[frame]")
+{
+    tmx_frame_t f;
+    ext_ctx_t c = {.f = &f, .switch_mode = true};
+    uint8_t first[] = {1, 5};
+    uint8_t big[2 + 254] = {255, 1};
+    tmx_frame_init(&f, TMX_STOCK_PAYLOAD_MAX);
+    tmx_frame_feed(&f, first, sizeof(first), 0, ext_capture, &c);
+    tmx_frame_feed(&f, big, sizeof(big), 0, ext_capture, &c);
+    TEST_ASSERT_EQUAL_INT(2, c.count);
+    TEST_ASSERT_EQUAL_size_t(254, c.lens[1]);
+    TEST_ASSERT_EQUAL_UINT32(0, f.dropped);
+}
+
+TEST_CASE("Called from inside the packet callback: bytes of the next packet in the same feed call use the new cap",
+          "[frame]")
+{
+    tmx_frame_t f;
+    ext_ctx_t c = {.f = &f, .switch_mode = true};
+    uint8_t chunk[2 + 2 + 40] = {1, 5, 41, 1};
+    tmx_frame_init(&f, TMX_STOCK_PAYLOAD_MAX);
+    tmx_frame_feed(&f, chunk, sizeof(chunk), 0, ext_capture, &c);
+    TEST_ASSERT_EQUAL_INT(2, c.count);
+    TEST_ASSERT_EQUAL_size_t(40, c.lens[1]);
+    TEST_ASSERT_EQUAL_UINT32(0, f.dropped);
+}
+
+TEST_CASE("On len 0 while strict: violation set, dropped +1", "[frame]")
+{
+    tmx_frame_t f;
+    ext_ctx_t c = {.f = &f};
+    const uint8_t pkt[] = {0};
+    tmx_frame_init(&f, TMX_EXT_PAYLOAD_MAX);
+    tmx_frame_set_mode(&f, TMX_EXT_PAYLOAD_MAX, true);
+    tmx_frame_feed(&f, pkt, sizeof(pkt), 0, ext_capture, &c);
+    TEST_ASSERT_TRUE(f.violation);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
+}
+
+TEST_CASE("On len 0 while strict: a valid packet after the zero in the same chunk is not emitted", "[frame]")
+{
+    tmx_frame_t f;
+    ext_ctx_t c = {.f = &f};
+    const uint8_t chunk[] = {0, 1, 14};
+    tmx_frame_init(&f, TMX_EXT_PAYLOAD_MAX);
+    tmx_frame_set_mode(&f, TMX_EXT_PAYLOAD_MAX, true);
+    tmx_frame_feed(&f, chunk, sizeof(chunk), 0, ext_capture, &c);
+    TEST_ASSERT_EQUAL_INT(0, c.count);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
+}
+
+TEST_CASE("On len 0 while not strict: dropped +1 and no violation", "[frame]")
+{
+    tmx_frame_t f;
+    ext_ctx_t c = {.f = &f};
+    const uint8_t chunk[] = {0, 1, 14};
+    tmx_frame_init(&f, TMX_STOCK_PAYLOAD_MAX);
+    tmx_frame_feed(&f, chunk, sizeof(chunk), 0, ext_capture, &c);
+    TEST_ASSERT_FALSE(f.violation);
+    TEST_ASSERT_EQUAL_INT(1, c.count);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
+}
+
+TEST_CASE("On a packet unfinished after 2000 ms while strict: violation set at the tick", "[frame]")
+{
+    tmx_frame_t f;
+    ext_ctx_t c = {.f = &f};
+    const uint8_t part[] = {5, 1, 2};
+    tmx_frame_init(&f, TMX_EXT_PAYLOAD_MAX);
+    tmx_frame_set_mode(&f, TMX_EXT_PAYLOAD_MAX, true);
+    tmx_frame_feed(&f, part, sizeof(part), 100, ext_capture, &c);
+    tmx_frame_tick(&f, 2100);
+    TEST_ASSERT_FALSE(f.violation);
+    tmx_frame_tick(&f, 2101);
+    TEST_ASSERT_TRUE(f.violation);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
+}
+
+TEST_CASE("Called from the packet callback: tmx_frame_halt stops the chunk and sets violation", "[frame]")
+{
+    tmx_frame_t f;
+    ext_ctx_t c = {.f = &f, .halt = true};
+    const uint8_t chunk[] = {1, 14, 1, 15};
+    tmx_frame_init(&f, TMX_STOCK_PAYLOAD_MAX);
+    tmx_frame_feed(&f, chunk, sizeof(chunk), 0, ext_capture, &c);
+    TEST_ASSERT_EQUAL_INT(1, c.count);
+    TEST_ASSERT_TRUE(f.violation);
+}

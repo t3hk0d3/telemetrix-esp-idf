@@ -28,3 +28,16 @@ Every change follows these rules.
   Run them as `<cmd> 2>&1 | tee $SCRATCH/<name>.log` (`set -o pipefail;` first when the exit code matters).
 - **Commits:** Conventional Commits (`feat(core): …`, `fix(net): …`, `test: …`, `docs: …`, `chore: …`), each ending
   with the `Co-Authored-By` line the session gives.
+
+## Client (`client/`)
+
+- **Python layout:** `client/` is its own package: `client/pyproject.toml`, sources in `client/src/telemetrix_idf/`,
+  tests in `client/tests/unit/` and `client/tests/integration/`.
+- **Python style:** ruff format and ruff check with `select = ["E", "F", "I", "B", "UP", "ASYNC"]`, line length 120.
+  Type hints on every public function. Public names are listed in `__all__`.
+- **Python test names:** files are `test_<topic>.py` and functions are `test_<scenario>_<effect>`, one test per
+  effect of the BDD skeleton. Async tests use `pytest.mark.asyncio`.
+- **Errors:** every exception the client raises derives from `telemetrix_idf.TelemetrixError`; never a bare
+  `Exception`.
+- **Make targets** (each with a `## ` help line): `make client-lint`, `make client-test` (unit),
+  `make client-integration` (against the host server). `make lint` also runs the client's ruff through pre-commit.
