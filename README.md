@@ -97,6 +97,9 @@ The stock client's `set_pin_mode_i2c()` always sends a bare `I2C_BEGIN`, so a pr
 | `max_dht`, `max_sonar`, `max_servo` | 6, 6, 4 (servos never more than the free LEDC channels) |
 | `allowed`, `n_allowed` | empty = any peer (`telemetrix_cidr_parse` builds entries) |
 | `task_priority`, `task_core` | 5, -1 (no affinity) |
+| `extended` | true: offer the extended protocol (false = serve every client stock) |
+| `plugin_budget_us` | 5000 |
+| `plugins`, `n_plugins` | none (see the extended protocol) |
 
 The network task's stack is 6144 bytes (internal constant).
 
@@ -105,10 +108,13 @@ has released everything), `connected(peer, ctx)`, `disconnected(ctx)`.
 
 **Status**: `telemetrix_get_status` returns whether the server runs and listens, the client's address, the counters
 `refused_connections`, `dropped_packets`, `ignored_commands`, `refused_commands`, `coalesced_reports`,
-`stalled_clients`, and what each claimed pin is used for. `telemetrix_kick_client` drops the current client.
+`stalled_clients`, and what each claimed pin is used for. For the extended protocol: whether the client is in
+extended mode (`extended`), `protocol_violations`, `error_reports`, and per plugin (`plugins`, `n_plugins`) its name,
+slot, `commands`, `refusals`, `overruns`, `max_us`, `async_dropped` and its status text. `telemetrix_kick_client` drops
+the current client.
 
 **Build switches** (menuconfig, "Telemetrix"): `CONFIG_TELEMETRIX_DHT`, `_SONAR`, `_ONE_WIRE`, `_SERVO`, `_I2C`,
-`_ANALOG`, each on by default. The commands of a switched-off feature are ignored and counted in `ignored_commands`,
+`_ANALOG`, `_EXTENDED` (the extended protocol and plugins), each on by default. The commands of a switched-off feature are ignored and counted in `ignored_commands`,
 like an id out of scope: DHT `DHT_NEW` (13), sonar `SONAR_NEW` (12), 1-wire ids 27-35, servo ids 6-8, I2C ids 9-11,
 analog `SET_PIN_MODE` mode 3.
 
@@ -157,7 +163,7 @@ Commands in scope (upstream `private_constants.py` ids):
 Periodic reports: digital `[3,2,pin,v]` and analog `[4,3,pin,v_hi,v_lo]` (raw 12-bit at 12 dB).
 
 Ignored and counted (`ignored_commands`), payload consumed: 19 and 21 (DAC), 22-26 (SPI), 36-56 (steppers),
-`SET_PIN_MODE` mode 7 (touch), and every id of 57 and above.
+`SET_PIN_MODE` mode 7 (touch), and every id of 57 and above (in stock mode; see the extended protocol).
 
 Timing: digital inputs are polled every 2 ms while any reports; analog every interval (default 19 ms, floor 10 ms);
 sonar one device per 33 ms in turn, echo timeout 25 ms, cm = echo_us / 58, reported only on change; DHT every 2000 ms,
@@ -166,6 +172,141 @@ reading the other devices early (no device is read twice within 2000 ms); every 
 the device stays registered. Sonar and DHT never block the network task: a GPIO ISR
 (sonar) or an RMT callback (DHT) completes them. The I2C timeout comes from the settings; 1-wire operations are bounded
 by their slot timing.
+
+## The extended protocol
+
+A client that asks for it gets the extended protocol (version 1.0) on the same connection: numbered commands, one
+ERROR report per refused command, a barrier (SYNC), a second bus through ON_BUS, discovery of the board, and
+plugins. A client that does not ask stays in stock mode, and stock-mode bytes are exactly the ones above. The
+application can turn it off at run time (`config.extended = false`: every client is served stock) or at build time
+(`CONFIG_TELEMETRIX_EXTENDED` off); either way the stock answer is sent to every handshake.
+
+**Handshake.** `GET_FIRMWARE_VERSION` with a payload of exactly `[0xA7, major, minor]` (magic `0xA7`, the client's
+extension version) gets the long answer `[7,5,3,2,100,0xA7,1,0]`: the stock version bytes, the magic and the server's
+extension version 1.0. Any other payload gets the stock `[4,5,3,2,100]`. With the same major the session enters
+extended mode at the lower of the two minors (the client computes it; the server stores it). With another major the
+long answer is sent and the session stays in stock mode. In extended mode `GET_FIRMWARE_VERSION` always gets the long
+answer. A session stays extended until the client disconnects; RESET releases the hardware and keeps the session (mode,
+minor and numbering).
+
+**Numbering.** Every packet after the handshake reply is numbered by a 16-bit counter `seq` that starts at 0 and wraps
+at 65536, SYNC included. The handshake's own `GET_FIRMWARE_VERSION` is not numbered. 16-bit values are big-endian.
+
+**Framing in extended mode.** The payload cap is 254 (`len` up to 255). These are protocol violations: `len` 0, a packet
+unfinished after 2000 ms, an id above 60. A violation closes the client with an RST (`SO_LINGER` {1,0}), counts
+`protocol_violations`, stops handling the rest of what was received, and releases the session as a disconnect does
+(pins to their safe states, plugin release hooks). The next client starts in stock framing. Ids 0-56 are known:
+those out of scope (DAC, SPI, steppers, touch) get ERROR `NOT_IN_SCOPE`; a short payload gets ERROR `BAD_ARGUMENT` and
+the connection stays.
+
+New commands:
+
+| Id | Command | Payload |
+|---|---|---|
+| 57 | SYNC | `[tag_hi, tag_lo, flags]` |
+| 58 | ON_BUS | `[bus, stock_id, stock payload...]` |
+| 59 | GET_CAPABILITIES | `[page]` |
+| 60 | PLUGIN | `[slot, sub, args...]` |
+
+New reports (each at most 255 bytes on the wire, length byte included):
+
+| Id | Report | Payload |
+|---|---|---|
+| 57 | ERROR | `[seq_hi, seq_lo, cmd, reason]`, then `[slot, sub]` when `cmd` is 60 and the payload had them, then `[code]` when `reason` is PLUGIN |
+| 58 | SYNC_REPLY | `[tag_hi, tag_lo, seq_hi, seq_lo]`; `seq` is the SYNC's own number |
+| 59 | BUS_REPORT | `[bus, stock_id, stock payload...]`: the inner command's stock report without its length byte |
+| 60 | CAPABILITIES | `[page, last_page, records...]` |
+| 61 | PLUGIN_REPORT | `[slot, sub, data...]` (data at most 251 bytes) |
+
+Reasons (`telemetrix_reason_t`):
+
+| Code | Reason | Meaning |
+|---|---|---|
+| 0 | NONE | done (never sent) |
+| 1 | NO_SUCH_PIN | the pin is not in the profile |
+| 2 | NO_CAPABILITY | the pin lacks the capability the use needs |
+| 3 | PIN_BUSY | the pin is claimed by another use |
+| 4 | EXHAUSTED | no LEDC channel or timer, RMT channel or device slot left |
+| 5 | BAD_ARGUMENT | short payload, value out of range, unknown mode, wrong state, page past the last |
+| 6 | BUS_UNKNOWN | the bus is not in the profile |
+| 7 | NOT_IN_SCOPE | the command is not served by this server (or its feature is switched off in Kconfig) |
+| 8 | HARDWARE | the driver failed |
+| 9 | NO_ANSWER | the I2C device did not answer |
+| 10 | PLUGIN | a plugin refused; its own code follows |
+| 11 | SKIPPED | not executed: an earlier command was refused while abort was on |
+| 12 | NO_SUCH_SLOT | no plugin in that slot |
+
+**Errors.** Every refused command produces exactly one ERROR, queued as a reply (never dropped) before the next
+command is handled. In extended mode ERROR replaces upstream's refusal reports, so a refusal is reported once: servo
+unavailable is ERROR `EXHAUSTED` instead of `[2,6,pin]`, an I2C NACK or short read ERROR `NO_ANSWER` instead of
+`[3,8,1,addr]`. DHT error reports and sonar timeouts are not refusals and stay stock reports in both modes.
+`error_reports` counts ERROR reports; `refused_commands` counts refusals except NOT_IN_SCOPE and SKIPPED.
+
+**SYNC.** The reply is queued after every reply and error of the commands before it. Flag bit 0, "abort on error",
+governs the commands after that SYNC up to the next one; a session starts with abort on. While abort is on and a
+command is refused, every later command up to the next SYNC is skipped: not executed, and ERROR `SKIPPED` with its own
+`seq`. A SYNC is never skipped. (The spec's wording, "the commands since the previous sync", cannot be served: the
+server cannot skip what it has already executed. A client that wants abort off for a batch sends a SYNC with flags 0
+before it.) A SYNC shorter than 3 bytes is refused with `BAD_ARGUMENT`, gets no SYNC_REPLY and changes nothing.
+
+**ON_BUS.** `bus` is the profile's bus number. The inner id must be 9-11 (I2C) or 27-35 (1-wire), else
+`BAD_ARGUMENT`; the inner payload is checked like a stock packet's; a bus number not in the profile gets
+`BUS_UNKNOWN`. The inner command's reply comes back as BUS_REPORT and its refusal as ERROR with `cmd` 58. Stock commands
+sent directly act on bus 0 in both modes. Stock clamps stay (an I2C read returns at most 59 bytes, so a BUS_REPORT is
+at most 66 bytes).
+
+**Discovery.** `GET_CAPABILITIES [page]` answers with CAPABILITIES; a page past `last_page` gets ERROR
+`BAD_ARGUMENT`. Records are `[type][len][value]` (`len` counts the value), never split across pages, at most 251
+record bytes a page. Order: CHIP, NAMED_CAP..., PIN... (profile order), BUS... (I2C then 1-wire, profile order),
+LIMIT..., PLUGIN... (slot order). Signed bytes are two's complement, multi-byte values big-endian, strings ASCII
+without a terminator (cut to fit a page).
+
+| Type | Record | Value |
+|---|---|---|
+| 1 | CHIP | `[model u16][revision u16 (major x 100 + minor)][IDF version, at most 32 bytes]` |
+| 2 | PIN | `[gpio][caps u16][safe][adc_unit i8][adc_channel i8][named capability ids...]`; caps are the `TELEMETRIX_CAP_*` bits, safe the `telemetrix_safe_state_t` value |
+| 3 | BUS | I2C `[0][bus][sda i8][scl i8][speed_hz u32]`; 1-wire `[1][bus][gpio i8]`; -1 = the client chooses |
+| 4 | LIMIT | `[kind][count u16]` |
+| 5 | PLUGIN | `[slot][major][minor][name]` |
+| 6 | NAMED_CAP | `[id][name]` |
+
+LIMIT kinds, computed from the grants:
+
+| Kind | Limit | Count |
+|---|---|---|
+| 1 | servos | min(`max_servo`, granted LEDC channels) |
+| 2 | PWM channels | granted LEDC channels |
+| 3 | PWM timers | granted LEDC timers |
+| 4 | DHT | `max_dht` when an RMT RX channel is granted, else 0 |
+| 5 | sonar | `max_sonar` |
+| 6 | analog interval floor, ms | `analog_interval_floor_ms` |
+
+**Plugins** (`include/telemetrix_plugin.h`). A plugin is trusted application code registered through
+`config.plugins` (at most `TELEMETRIX_PLUGINS_MAX`, 8); its slot is its index there. A client in extended mode reaches it
+with `PLUGIN [slot, sub, args...]`, and the plugin answers with PLUGIN_REPORT. In stock mode plugins are unreachable.
+
+- Names match `^[a-z0-9_]+\.[a-z0-9_.]+$`, at most 32 bytes, unique; the `telemetrix.` prefix is reserved for
+  built-ins (there are none yet).
+- Named capabilities: a plugin declares names (`named_caps`); a profile pin lists the names it grants
+  (`telemetrix_pin_t.named`, `n_named`). At most 16 names per server, each at most 24 bytes; ids in order of first
+  declaration. A plugin claims a granted pin with `telemetrix_plugin_claim_pin`, and RMT channels of the grant with
+  `telemetrix_plugin_claim_rmt`; the server puts its pins back in their safe states on release.
+- `telemetrix_start` returns `ESP_ERR_INVALID_ARG` for a pin naming a capability no registered plugin declares, a bad
+  or duplicate plugin name, or too many plugins or names; `ESP_ERR_NOT_SUPPORTED` for plugins with
+  `CONFIG_TELEMETRIX_EXTENDED` off.
+- Every call into a plugin (command, poll, release) runs on the network task. Command and poll calls are timed against
+  `config.plugin_budget_us` (default 5000 us); an overrun is counted (`overruns`, `max_us`), never aborted, and the
+  network task waits for it, so a slow plugin delays every client report.
+- `poll` runs only during an extended session: at once, then when the milliseconds it returned are up or after
+  `telemetrix_plugin_wake` (`UINT32_MAX` = only on a wake). The network task never sleeps past the next poll.
+- `release` runs on disconnect, RESET and stop, in slot order, before the server releases the pins and channels.
+- `telemetrix_plugin_emit` (network task only) queues a PLUGIN_REPORT as a reply. `telemetrix_plugin_emit_async` (any
+  task, not an ISR) puts it in a ring of 8 entries of up to 251 data bytes and wakes the network task, which sends it.
+  Both need a client in extended mode (`ESP_ERR_INVALID_STATE` otherwise). A full ring gives `ESP_ERR_NO_MEM`, counted
+  in `async_dropped`; entries queued in a session that has ended are dropped.
+- The ctx a plugin is handed lives as long as the server. A plugin's own tasks must stop calling `emit_async` and
+  `wake` before its release hook at stop returns; a later call fails with `ESP_ERR_INVALID_STATE` without touching the
+  ctx.
 
 ## Deviations from upstream 3.2.0
 
@@ -228,13 +369,19 @@ while the socket is backed up a fast pulse (0, 1, 0) on a digital input can reac
 ## Sockets and memory
 
 - Sockets: `TELEMETRIX_SOCKETS_M1` = 3 (listener, client, a transient one while a second connection is refused);
-  eventfds: `TELEMETRIX_EVENTFDS` = 1 (wakes the network task from ISRs and other tasks).
-- Network task stack: 6144 bytes, internal RAM.
+  eventfds: `TELEMETRIX_EVENTFDS` = 1 (wakes the network task from ISRs, other tasks and plugin `emit_async` and `wake`;
+  the extended protocol adds no socket or eventfd).
+- Network task stack: 6144 bytes, internal RAM. The status snapshot (1440 bytes on a 32-bit target) is built in the
+  server's heap state, not on this stack; the deepest frames the task itself adds are a few hundred bytes (the emit-ring
+  drain 560, a CAPABILITIES page 304, an ERROR 304, measured with `-fstack-usage` on esp32). Plugin calls run on this
+  stack too.
+- Plugin emit ring: 8 x 260 bytes (2080), static.
 - Send queue: `send_queue_bytes` (default 4096 bytes), allocated once at start, internal RAM when available.
 - Per-connection state `tmx_conn_t`: 4064 bytes on a 32-bit target (measured with `-m32`; 4072 on the 64-bit host). Of
   that, the unsent-entry index is 160 entries x 6 bytes and the pending table, the keyed reports waiting for room, is
   192 entries x 16 bytes (3072 bytes; room for 64 digital pins, 64 analog pins and up to 64 sonar and DHT devices).
-- Adapter state `tmx_adapter_t` (claims, per-pin tables, sensors): 1604 bytes on a 32-bit target.
+- Adapter state `tmx_adapter_t` (claims, per-pin tables, sensors, session, plugin registry): 2536 bytes on a 32-bit
+  target.
 - The server never allocates after `telemetrix_start` returns, except driver handles created on a client's request.
 
 ## Testing
@@ -244,8 +391,12 @@ while the socket is backed up a fast pulse (0, 1, 0) on a digital input can reac
 - `make lint`: astyle and ruff through pre-commit.
 - `make test-host`: Unity tests on the IDF `linux` target, twice: `test_host/` with every feature on and
   `test_host/features_off/` with every `CONFIG_TELEMETRIX_*` switch off.
-- `make fuzz`: libFuzzer on the frame assembler and the adapter (60 s per target).
-- `make host-server`: build the real server for `linux` with a fake driver layer.
+- `make fuzz`: libFuzzer on the frame assembler, the adapter, and an extended session (handshake, frame and adapter
+  together with the test plugin, ON_BUS on two buses), 60 s per target.
+- `make host-server`: build the real server for `linux` with a fake driver layer. `--stock-only` sets
+  `config.extended` false; `--test-plugin` registers the test plugin `test.echo` and grants gpio 36 its named
+  capability `test.led`. The host profile adds I2C bus 1 (sda 2, scl 15, a device at 0x48), 1-wire bus 1 (gpio 35, one
+  ROM) and gpio 36 to the stock client's pins.
 - `make test-integration`: pytest against the host server with the stock client, hostile clients, and the recording
   proxy tests (including one run of the compatibility script).
 - `make build-examples`: build every board example.
