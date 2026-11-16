@@ -8,14 +8,36 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "fake/tmx_drv_fake.h"
 #include "tmx_adapter.h"
 #include "unity.h"
 
-#define PORT 37411
+static uint16_t port;
 
+/** A port nobody listens on right now: bind 0, read it back, close. Each test takes its own, so parallel runs differ. */
+static uint16_t pick_port(void)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a = {.sin_family = AF_INET};
+    socklen_t len = sizeof(a);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL(0, bind(fd, (struct sockaddr *)&a, sizeof(a)));
+    TEST_ASSERT_EQUAL(0, getsockname(fd, (struct sockaddr *)&a, &len));
+    close(fd);
+    return ntohs(a.sin_port);
+}
+
+/* gpio 2 rests driven high and gpio 4 pulled up, so a safe state differs from what a client leaves behind */
 static const telemetrix_pin_t pins[] = {
-    {.gpio = 2, .caps = TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_DOUT, .safe = TELEMETRIX_SAFE_DRIVE_LOW, .adc_unit = -1,
-     .adc_channel = -1},
+    {
+        .gpio = 2, .caps = TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_DOUT, .safe = TELEMETRIX_SAFE_DRIVE_HIGH, .adc_unit = -1,
+        .adc_channel = -1
+    },
+    {
+        .gpio = 4, .caps = TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_PULL_UP, .safe = TELEMETRIX_SAFE_PULL_UP, .adc_unit = -1,
+        .adc_channel = -1
+    },
 };
 
 static int hook_reset, hook_connected, hook_disconnected, hook_access, access_allow;
@@ -51,19 +73,20 @@ static const telemetrix_hooks_t hooks = {
     .access = on_access, .reset = on_reset, .connected = on_connected, .disconnected = on_disconnected,
 };
 
-static telemetrix_profile_t profile = {.pins = pins, .n_pins = 1};
+static telemetrix_profile_t profile = {.pins = pins, .n_pins = 2};
 
 static void start_server(const telemetrix_config_t *cfg)
 {
     hook_reset = hook_connected = hook_disconnected = hook_access = 0;
     access_allow = 1;
+    tmx_fake_reset();
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_start(&profile, cfg, &hooks));
 }
 
 static int dial(void)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(PORT)};
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port)};
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     TEST_ASSERT_TRUE(fd >= 0);
     TEST_ASSERT_EQUAL(0, connect(fd, (struct sockaddr *)&a, sizeof(a)));
@@ -101,6 +124,18 @@ static bool wait_for(bool (*pred)(void))
     return false;
 }
 
+static bool calls_have(const char *line)
+{
+    return strstr(tmx_fake_calls(), line) != NULL;
+}
+
+static void settle(void)
+{
+    for (int i = 0; i < 20; i++) {
+        vTaskDelay(1);
+    }
+}
+
 static bool client_seen(void)
 {
     telemetrix_status_t st;
@@ -119,7 +154,8 @@ TEST_CASE("telemetrix_start on an invalid profile: ESP_ERR_INVALID_ARG and nothi
     telemetrix_profile_t bad = {.pins = dup, .n_pins = 2};
     telemetrix_config_t cfg;
     telemetrix_config_default(&cfg);
-    cfg.port = PORT;
+    port = pick_port();
+    cfg.port = port;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, telemetrix_start(&bad, &cfg, NULL));
     telemetrix_status_t st;
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
@@ -131,7 +167,8 @@ TEST_CASE("server session: start, a loop round trip, a second connection, kick, 
 {
     telemetrix_config_t cfg;
     telemetrix_config_default(&cfg);
-    cfg.port = PORT;
+    port = pick_port();
+    cfg.port = port;
     start_server(&cfg);
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, telemetrix_start(&profile, &cfg, &hooks));
 
@@ -139,6 +176,8 @@ TEST_CASE("server session: start, a loop round trip, a second connection, kick, 
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
     TEST_ASSERT_TRUE(st.running);
     TEST_ASSERT_TRUE(st.listening);
+    TEST_ASSERT_TRUE(calls_have("gpio_output(2,1)"));          /* every profile pin in its safe state at start */
+    TEST_ASSERT_TRUE(calls_have("gpio_input(4,1,0)"));
 
     int c1 = dial();
     TEST_ASSERT_TRUE(wait_for(client_seen));
@@ -152,9 +191,10 @@ TEST_CASE("server session: start, a loop round trip, a second connection, kick, 
 
     const uint8_t mode_out[] = {3, 1, 2, 1};          /* SET_PIN_MODE gpio 2 output */
     TEST_ASSERT_EQUAL(4, send(c1, mode_out, sizeof(mode_out), 0));
-    for (int i = 0; i < 20; i++) {
-        vTaskDelay(1);
-    }
+    const uint8_t write_low[] = {3, 2, 2, 0};          /* DIGITAL_WRITE gpio 2 low */
+    TEST_ASSERT_EQUAL(4, send(c1, write_low, sizeof(write_low), 0));
+    settle();
+    TEST_ASSERT_TRUE(calls_have("gpio_set(2,0)"));
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
     TEST_ASSERT_EQUAL(1, st.n_pins);
     TEST_ASSERT_EQUAL_STRING("output", st.pins[0].use);
@@ -168,11 +208,15 @@ TEST_CASE("server session: start, a loop round trip, a second connection, kick, 
     TEST_ASSERT_EQUAL(3, send(c1, loop, sizeof(loop), 0));
     TEST_ASSERT_EQUAL(0, read_n(c1, reply, sizeof(reply)));
 
+    tmx_fake_reset();                                  /* only what the kick causes from here on */
     telemetrix_kick_client();
     TEST_ASSERT_EQUAL(-2, read_n(c1, &one, 1));        /* closed from the server side */
     close(c1);
     TEST_ASSERT_TRUE(wait_for(client_gone));
     TEST_ASSERT_EQUAL(1, hook_disconnected);
+    TEST_ASSERT_TRUE(calls_have("gpio_output(2,1)"));  /* the claimed pin back in its safe state */
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
+    TEST_ASSERT_EQUAL(0, st.n_pins);
 
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&st));
@@ -185,7 +229,8 @@ TEST_CASE("server access: the allowed list and the access hook refuse before any
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_cidr_parse("10.99.0.0/16", &only_other));
     telemetrix_config_t cfg;
     telemetrix_config_default(&cfg);
-    cfg.port = PORT;
+    port = pick_port();
+    cfg.port = port;
     cfg.allowed = &only_other;
     cfg.n_allowed = 1;
     start_server(&cfg);
@@ -222,15 +267,50 @@ TEST_CASE("server stop with a client: pins released, the client closed, the hook
 {
     telemetrix_config_t cfg;
     telemetrix_config_default(&cfg);
-    cfg.port = PORT;
+    port = pick_port();
+    cfg.port = port;
     start_server(&cfg);
     int c = dial();
     TEST_ASSERT_TRUE(wait_for(client_seen));
+    const uint8_t mode_out[] = {3, 1, 2, 1};
+    TEST_ASSERT_EQUAL(4, send(c, mode_out, sizeof(mode_out), 0));
+    settle();
+    tmx_fake_reset();
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
     TEST_ASSERT_EQUAL(1, hook_disconnected);
+    TEST_ASSERT_TRUE(calls_have("gpio_output(2,1)"));  /* released: back to the safe state */
     uint8_t one;
     TEST_ASSERT_TRUE(read_n(c, &one, 1) == -2 || read_n(c, &one, 1) == -3);
     close(c);
     start_server(&cfg);                                /* the port is free again */
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("RESET twice and a write in one send: the hook runs twice and the write after the RESET takes effect", "[server]")
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    start_server(&cfg);
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    const uint8_t mode_out[] = {3, 1, 2, 1};
+    TEST_ASSERT_EQUAL(4, send(c, mode_out, sizeof(mode_out), 0));
+    settle();
+    tmx_fake_reset();
+    /* RESET, RESET, SET_PIN_MODE gpio 2 output, DIGITAL_WRITE gpio 2 low, all in one chunk */
+    const uint8_t chunk[] = {1, 20, 1, 20, 3, 1, 2, 1, 3, 2, 2, 0};
+    TEST_ASSERT_EQUAL(sizeof(chunk), send(c, chunk, sizeof(chunk), 0));
+    settle();
+    TEST_ASSERT_EQUAL(2, hook_reset);
+    const char *calls = tmx_fake_calls();
+    const char *released = strstr(calls, "gpio_output(2,1)");   /* the RESET's safe state */
+    const char *written = strstr(calls, "gpio_set(2,0)");
+    TEST_ASSERT_NOT_NULL(released);
+    TEST_ASSERT_NOT_NULL(written);
+    TEST_ASSERT_TRUE(released < written);
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
     TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
 }

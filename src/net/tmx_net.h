@@ -18,6 +18,12 @@ void tmx_net_wake(void);
 /** Keyed (coalescable) unsent entries tracked per queue; more keys than that are queued without coalescing. */
 #define TMX_CONN_KEYED_MAX 160
 
+/** Keyed reports waiting for room, one per (kind, key), latest value wins. Sized for 64 digital pins, 64 analog pins and
+ *  up to 64 sonar and DHT devices between them (a device needs a pin). */
+#define TMX_CONN_PENDING_MAX 192
+/** The longest keyed report: DHT data, [11,11,0,pin,hum f32,temp f32] = 12 bytes with its length byte. */
+#define TMX_CONN_PENDING_BYTES 12
+
 typedef ssize_t (*tmx_send_fn)(int fd, const void *buf, size_t n, int flags);
 
 typedef struct {
@@ -27,6 +33,13 @@ typedef struct {
     uint16_t key;
 } tmx_conn_key_t;
 
+typedef struct {
+    int8_t kind;
+    uint8_t len;
+    uint16_t key;
+    uint8_t data[TMX_CONN_PENDING_BYTES];
+} tmx_conn_pend_t;
+
 /** Fully defined so tests can keep one on the stack; the buffer is allocated once by tmx_conn_init. */
 typedef struct tmx_conn {
     uint8_t *buf;
@@ -35,12 +48,14 @@ typedef struct tmx_conn {
     uint16_t tail;                              /**< end of queued bytes */
     tmx_conn_key_t keyed[TMX_CONN_KEYED_MAX];   /**< unsent keyed entries in queue order (all at or after head) */
     uint8_t n_keyed;
+    tmx_conn_pend_t pend[TMX_CONN_PENDING_MAX]; /**< keyed reports that did not fit, oldest first */
+    uint16_t n_pend;
     bool broken;                                /**< a reply found no room even in the reply reserve */
     bool stalling;                              /**< bytes are queued; stall_since is the last progress or first try */
     uint32_t stall_since;
     tmx_send_fn send_fn;
     uint32_t coalesced;                         /**< reports replaced or evicted for a newer value, since init */
-    uint32_t dropped;                           /**< non-reply reports lost without a key to coalesce on, since init */
+    uint32_t dropped;                           /**< unkeyed non-reply reports lost for lack of room, since init */
 } tmx_conn_t;
 
 typedef enum { TMX_CONN_IDLE, TMX_CONN_PENDING, TMX_CONN_STALLED, TMX_CONN_ERROR } tmx_conn_state_t;
@@ -53,15 +68,16 @@ void tmx_conn_deinit(tmx_conn_t *c);
 void tmx_conn_set_sender(tmx_conn_t *c, tmx_send_fn send_fn);
 /** Queue one report. reply true: never dropped, keys ignored, may use the reply reserve (a quarter of the queue); a reply
  *  that fits nowhere marks the connection broken and flush reports it as STALLED. Other reports need room outside the
- *  reserve; a keyed one replaces an unsent entry of the same key, or evicts the oldest unsent entry of its kind when
- *  there is no room; an unkeyed one with no room is counted in dropped. key_kind TMX_COALESCE_NONE (-1) = no key. */
+ *  reserve; a keyed one replaces an unsent entry of the same key, and when there is no room waits in a pending table
+ *  (latest value per key) that flush moves into the queue as room frees: keyed reports are coalesced, never lost; an
+ *  unkeyed one with no room is counted in dropped. key_kind TMX_COALESCE_NONE (-1) = no key. */
 void tmx_conn_queue(tmx_conn_t *c, const uint8_t *r, size_t n, bool reply, int8_t key_kind, uint16_t key);
 /** Send what the socket takes without blocking. IDLE: queue empty. PENDING: bytes left. STALLED: bytes left and no
  *  progress for stall_ms (0 = never), or broken. ERROR: the socket failed. */
 tmx_conn_state_t tmx_conn_flush(tmx_conn_t *c, int fd, uint32_t now_ms, uint16_t stall_ms);
 /** Empty the queue and clear the broken and stall state; the buffer and the counters stay. */
 void tmx_conn_reset(tmx_conn_t *c);
-/** Bytes queued and not yet sent. */
+/** Bytes queued and not yet sent (pending keyed reports not included). */
 size_t tmx_conn_pending(const tmx_conn_t *c);
 
 /* ---- Sockets (sock.c) ---- */

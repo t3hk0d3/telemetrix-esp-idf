@@ -77,7 +77,7 @@ static void reply_loop(uint8_t c)
 
 static void drain(void)
 {
-    SCRIPT(1000);
+    SCRIPT(1000, 1000, 1000, 1000);
     TEST_ASSERT_EQUAL(TMX_CONN_IDLE, tmx_conn_flush(&conn, 3, 0, 1000));
 }
 
@@ -142,35 +142,101 @@ TEST_CASE("queue of a keyed report of another size: the old entry goes and the n
     conn_stop();
 }
 
-TEST_CASE("queue of a digital report with no room: the oldest queued digital value goes, the new one stays", "[conn]")
+static void fill_digital(void)
 {
-    conn_start(64); /* 48 bytes outside the reply reserve: twelve digital reports */
     for (uint8_t pin = 0; pin < 12; pin++) {
         digital(pin, 1);
     }
     TEST_ASSERT_EQUAL(48, tmx_conn_pending(&conn));
+}
+
+TEST_CASE("queue of a digital report with no room: nothing queued is lost and the report is delivered once space frees",
+          "[conn]")
+{
+    conn_start(64); /* 48 bytes outside the reply reserve: twelve digital reports */
+    fill_digital();
     digital(40, 0);
     TEST_ASSERT_EQUAL(48, tmx_conn_pending(&conn));
-    TEST_ASSERT_EQUAL_UINT32(1, conn.coalesced);
+    TEST_ASSERT_EQUAL_UINT32(0, conn.dropped);
     drain();
-    TEST_ASSERT_EQUAL(48, sent_n);
-    const uint8_t first[] = {3, 2, 1, 1};     /* pin 0 was evicted */
+    TEST_ASSERT_EQUAL(52, sent_n);
+    const uint8_t first[] = {3, 2, 0, 1};
     const uint8_t last[] = {3, 2, 40, 0};
     TEST_ASSERT_EQUAL_UINT8_ARRAY(first, sent, sizeof(first));
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(last, sent + 44, sizeof(last));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(last, sent + 48, sizeof(last));
     conn_stop();
 }
 
-TEST_CASE("queue of a report with no room and no queued entry of its kind: it is dropped and counted", "[conn]")
+TEST_CASE("queue of an analog report with no room and no queued analog entry: delivered once space frees", "[conn]")
 {
     conn_start(64);
-    for (uint8_t pin = 0; pin < 12; pin++) {
-        digital(pin, 1);
-    }
+    fill_digital();
     analog(34, 0, 1);
-    TEST_ASSERT_EQUAL(48, tmx_conn_pending(&conn));
-    TEST_ASSERT_EQUAL_UINT32(1, conn.dropped);
-    TEST_ASSERT_EQUAL_UINT32(0, conn.coalesced);
+    TEST_ASSERT_EQUAL_UINT32(0, conn.dropped);
+    drain();
+    const uint8_t want[] = {4, 3, 34, 0, 1};
+    TEST_ASSERT_EQUAL(53, sent_n);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, sent + 48, sizeof(want));
+    conn_stop();
+}
+
+TEST_CASE("queue of a pin change with the queue full of replies: the change survives and arrives after them", "[conn]")
+{
+    conn_start(64);
+    for (int i = 0; i < 17; i++) { /* 51 bytes: past the 48 outside the reserve */
+        reply_loop((uint8_t)i);
+    }
+    digital(7, 1);
+    TEST_ASSERT_FALSE(conn.broken);
+    drain();
+    TEST_ASSERT_EQUAL(55, sent_n);
+    const uint8_t want[] = {3, 2, 7, 1};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, sent + 51, sizeof(want));
+    conn_stop();
+}
+
+TEST_CASE("queue of two updates to a key that is pending: only the latest is delivered", "[conn]")
+{
+    conn_start(64);
+    fill_digital();
+    digital(40, 0);
+    digital(40, 1);
+    TEST_ASSERT_EQUAL_UINT32(1, conn.coalesced);
+    drain();
+    TEST_ASSERT_EQUAL(52, sent_n);
+    const uint8_t want[] = {3, 2, 40, 1};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, sent + 48, sizeof(want));
+    conn_stop();
+}
+
+TEST_CASE("flush with several pending keyed reports: they enter the queue in arrival order", "[conn]")
+{
+    conn_start(64);
+    fill_digital();
+    analog(34, 0, 9);
+    digital(41, 1);
+    digital(40, 1);
+    drain();
+    TEST_ASSERT_EQUAL(61, sent_n);
+    const uint8_t want[] = {4, 3, 34, 0, 9, 3, 2, 41, 1, 3, 2, 40, 1};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, sent + 48, sizeof(want));
+    conn_stop();
+}
+
+TEST_CASE("flush after a partial send: pending reports move in behind the unsent bytes", "[conn]")
+{
+    conn_start(64);
+    fill_digital();
+    digital(40, 1);
+    digital(41, 1);
+    SCRIPT(8);
+    TEST_ASSERT_EQUAL(TMX_CONN_PENDING, tmx_conn_flush(&conn, 3, 0, 1000));
+    TEST_ASSERT_EQUAL(8, sent_n);
+    TEST_ASSERT_EQUAL(TMX_CONN_PENDING, tmx_conn_flush(&conn, 3, 1, 1000)); /* the script is spent: EAGAIN */
+    drain();
+    TEST_ASSERT_EQUAL(48, sent_n); /* 40 left of the queue, then the two pending reports; drain() reset the count */
+    const uint8_t tail[] = {3, 2, 40, 1, 3, 2, 41, 1};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(tail, sent + sent_n - 8, sizeof(tail));
     conn_stop();
 }
 
@@ -361,5 +427,16 @@ TEST_CASE("reset: the queue is empty, the broken and stall state are clear, the 
     TEST_ASSERT_EQUAL(TMX_CONN_IDLE, tmx_conn_flush(&conn, 3, 0, 500));
     digital(1, 1);
     TEST_ASSERT_EQUAL_UINT32(1, conn.coalesced); /* the key table was cleared: a fresh entry, no replacement */
+    conn_stop();
+}
+
+TEST_CASE("reset with pending keyed reports: they are forgotten", "[conn]")
+{
+    conn_start(64);
+    fill_digital();
+    digital(40, 1);
+    tmx_conn_reset(&conn);
+    TEST_ASSERT_EQUAL(TMX_CONN_IDLE, tmx_conn_flush(&conn, 3, 0, 500));
+    TEST_ASSERT_EQUAL(0, sent_n);
     conn_stop();
 }

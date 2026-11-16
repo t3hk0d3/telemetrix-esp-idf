@@ -50,6 +50,7 @@ void tmx_conn_reset(tmx_conn_t *c)
 {
     c->head = c->tail = 0;
     c->n_keyed = 0;
+    c->n_pend = 0;
     c->broken = false;
     c->stalling = false;
     c->stall_since = 0;
@@ -95,9 +96,49 @@ static void append(tmx_conn_t *c, const uint8_t *r, size_t n, int8_t key_kind, u
     }
     memcpy(c->buf + c->tail, r, n);
     if (key_kind >= 0 && c->n_keyed < TMX_CONN_KEYED_MAX) {
-        c->keyed[c->n_keyed++] = (tmx_conn_key_t) {.off = c->tail, .len = (uint8_t)n, .kind = key_kind, .key = key};
+        c->keyed[c->n_keyed++] = (tmx_conn_key_t) {
+            .off = c->tail, .len = (uint8_t)n, .kind = key_kind, .key = key
+        };
     }
     c->tail += (uint16_t)n;
+}
+
+static tmx_conn_pend_t *find_pending(tmx_conn_t *c, int8_t kind, uint16_t key)
+{
+    for (uint16_t i = 0; i < c->n_pend; i++) {
+        if (c->pend[i].kind == kind && c->pend[i].key == key) {
+            return &c->pend[i];
+        }
+    }
+    return NULL;
+}
+
+/** Move pending reports into the queue, oldest first, while the room outside the reply reserve allows. */
+static void drain_pending(tmx_conn_t *c)
+{
+    size_t limit = c->cap - c->cap / 4;
+    uint16_t moved = 0;
+    while (moved < c->n_pend && fits(c, c->pend[moved].len, limit)) {
+        append(c, c->pend[moved].data, c->pend[moved].len, c->pend[moved].kind, c->pend[moved].key);
+        moved++;
+    }
+    if (moved) {
+        memmove(c->pend, c->pend + moved, (size_t)(c->n_pend - moved) * sizeof(c->pend[0]));
+        c->n_pend -= moved;
+    }
+}
+
+static void park(tmx_conn_t *c, const uint8_t *r, size_t n, int8_t kind, uint16_t key)
+{
+    if (n > TMX_CONN_PENDING_BYTES || c->n_pend >= TMX_CONN_PENDING_MAX) {
+        c->dropped++;                   /* beyond what a validated profile can produce */
+        return;
+    }
+    tmx_conn_pend_t *p = &c->pend[c->n_pend++];
+    p->kind = kind;
+    p->key = key;
+    p->len = (uint8_t)n;
+    memcpy(p->data, r, n);
 }
 
 void tmx_conn_queue(tmx_conn_t *c, const uint8_t *r, size_t n, bool reply, int8_t key_kind, uint16_t key)
@@ -114,9 +155,16 @@ void tmx_conn_queue(tmx_conn_t *c, const uint8_t *r, size_t n, bool reply, int8_
         }
         return;
     }
+    drain_pending(c);
     size_t limit = c->cap - c->cap / 4;     /* the last quarter is held back for replies */
-    bool replaced = false;
     if (key_kind >= 0) {
+        tmx_conn_pend_t *p = find_pending(c, key_kind, key);
+        if (p && n <= TMX_CONN_PENDING_BYTES) {
+            memcpy(p->data, r, n);          /* newer than anything queued under this key */
+            p->len = (uint8_t)n;
+            c->coalesced++;
+            return;
+        }
         for (uint8_t i = 0; i < c->n_keyed; i++) {
             if (c->keyed[i].kind == key_kind && c->keyed[i].key == key) {
                 if (c->keyed[i].len == n) {
@@ -125,29 +173,19 @@ void tmx_conn_queue(tmx_conn_t *c, const uint8_t *r, size_t n, bool reply, int8_
                     return;
                 }
                 remove_keyed(c, i);         /* another size: the new report goes to the end */
-                replaced = true;
+                c->coalesced++;
                 break;
             }
         }
-    }
-    if (replaced) {
-        c->coalesced++;
-    }
-    if (key_kind >= 0) {
-        while (!fits(c, n, limit)) {
-            uint8_t i = 0;
-            while (i < c->n_keyed && c->keyed[i].kind != key_kind) {
-                i++;
-            }
-            if (i == c->n_keyed) {
-                break;
-            }
-            remove_keyed(c, i);
-            c->coalesced++;
+        if (c->n_pend == 0 && fits(c, n, limit)) {
+            append(c, r, n, key_kind, key);
+        } else {
+            park(c, r, n, key_kind, key);
         }
+        return;
     }
     if (fits(c, n, limit)) {
-        append(c, r, n, key_kind, key);
+        append(c, r, n, TMX_COALESCE_NONE, 0);
     } else {
         c->dropped++;
     }
@@ -171,6 +209,7 @@ tmx_conn_state_t tmx_conn_flush(tmx_conn_t *c, int fd, uint32_t now_ms, uint16_t
     if (c->broken) {
         return TMX_CONN_STALLED;
     }
+    drain_pending(c);
     while (c->head < c->tail) {
         size_t want = tmx_conn_pending(c);
         ssize_t r = c->send_fn(fd, c->buf + c->head, want, SEND_FLAGS);
@@ -181,13 +220,14 @@ tmx_conn_state_t tmx_conn_flush(tmx_conn_t *c, int fd, uint32_t now_ms, uint16_t
             if ((size_t)r < want) {
                 break;
             }
+            drain_pending(c);       /* the queue emptied: room for what waited */
         } else if (r == 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             break;
         } else {
             return TMX_CONN_ERROR;
         }
     }
-    if (c->head == c->tail) {
+    if (c->head == c->tail && c->n_pend == 0) {
         c->head = c->tail = 0;
         c->n_keyed = 0;
         c->stalling = false;

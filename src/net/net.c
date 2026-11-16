@@ -230,6 +230,13 @@ static void packet_cb(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
 {
     tmx_server_t *s = ctx;
     tmx_adapter_packet(&s->adapter, id, payload, len, s->now);
+    /* per packet, so commands after a RESET in the same chunk meet a fresh session and every RESET calls the hook */
+    if (tmx_adapter_reset_requested(&s->adapter)) {
+        tmx_completion_reset();         /* the adapter has released: stale completions must not meet the next session */
+        if (s->hooks.reset) {
+            s->hooks.reset(s->hooks.ctx);
+        }
+    }
 }
 
 /** Release the client: socket closed, claims freed and pins in their safe states, queue and completions dropped. Then
@@ -307,12 +314,6 @@ static bool read_client(tmx_server_t *s, const char **why)
     }
     s->now = now_ms();
     tmx_frame_feed(&s->frame, buf, (size_t)r, s->now, packet_cb, s);
-    if (tmx_adapter_reset_requested(&s->adapter)) {
-        tmx_completion_reset();         /* the adapter has released: stale completions must not meet the next session */
-        if (s->hooks.reset) {
-            s->hooks.reset(s->hooks.ctx);
-        }
-    }
     return true;
 }
 
