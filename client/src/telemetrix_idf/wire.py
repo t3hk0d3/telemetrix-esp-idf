@@ -340,7 +340,10 @@ def i2c_begin(sda: int | None = None, scl: int | None = None) -> bytes:
 
 
 def i2c_read(addr: int, reg: int, n: int, stop: bool) -> bytes:
-    """`[addr, reg, count, stop]`; the server reads at most 59 bytes, so more is refused here."""
+    """`[addr, reg, count, stop]`; the server reads at most 59 bytes, so more is refused here, and a read of
+    nothing too (`ValueError`)."""
+    if _is_int(n) and n == 0:
+        raise ValueError("count 0: an I2C read of nothing")
     payload = bytes([_u8("addr", addr, 127), _u8("reg", reg), _u8("count", n, I2C_READ_MAX), _flag("stop", stop)])
     return encode(CMD.I2C_READ, payload)
 

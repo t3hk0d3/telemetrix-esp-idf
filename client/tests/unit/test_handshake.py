@@ -261,6 +261,17 @@ async def test_connect_refused_raises_connection_lost() -> None:
         await connect("127.0.0.1", port)
 
 
+@pytest.mark.asyncio
+async def test_connect_open_timeout_raises_asyncio_timeout_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def never_opens(*args: object, **kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(asyncio, "open_connection", never_opens)
+    with pytest.raises(asyncio.TimeoutError) as err:
+        await connect("127.0.0.1", 1, timeout=0.05)
+    assert not isinstance(err.value, ConnectionLost)
+
+
 # --- connection: reader, router, loss ----------------------------------------------------------------------------
 
 

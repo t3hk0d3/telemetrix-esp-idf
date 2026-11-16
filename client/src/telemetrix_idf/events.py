@@ -140,6 +140,7 @@ class EventHub:
         self._streams: dict[Key, set[EventStream[Any]]] = {}
         self._queue: deque[tuple[Key, Event]] = deque()
         self._wake = asyncio.Event()
+        self._closed = False
         self._task = asyncio.get_running_loop().create_task(self._run(), name="telemetrix-events")
 
     def configure(self, key: Key) -> Callable[[], None] | None:
@@ -170,7 +171,11 @@ class EventHub:
         return unsubscribe
 
     def stream(self, key: Key) -> EventStream[Any]:
+        """A stream of `key`'s events; one created after the connection closed ends at once."""
         s: EventStream[Any] = EventStream(self, key)
+        if self._closed:
+            s._closed = True
+            return s
         self._streams.setdefault(key, set()).add(s)
         return s
 
@@ -228,6 +233,7 @@ class EventHub:
 
     def close(self) -> None:
         """Stop the dispatch task and end every iterator (connection closed)."""
+        self._closed = True
         self._task.cancel()
         for streams in list(self._streams.values()):
             for s in list(streams):

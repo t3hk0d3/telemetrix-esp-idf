@@ -24,8 +24,11 @@ async def ext() -> AsyncIterator[tuple[FakeExtServer, Board]]:
 
 
 @asynccontextmanager
-async def stock(**kw: Any) -> AsyncIterator[tuple[FakeStockServer, Board]]:
-    async with FakeStockServer(**kw) as srv, connect("127.0.0.1", srv.port, timeout=1.0) as board:
+async def stock(stock_sensors: bool = False, **kw: Any) -> AsyncIterator[tuple[FakeStockServer, Board]]:
+    async with (
+        FakeStockServer(**kw) as srv,
+        connect("127.0.0.1", srv.port, timeout=1.0, stock_sensors=stock_sensors) as board,
+    ):
         yield srv, board
 
 
@@ -135,6 +138,25 @@ async def test_iterator_ends_on_close() -> None:
             await asyncio.wait_for(changes.__anext__(), 1)
 
 
+@pytest.mark.asyncio
+async def test_iterator_created_after_close_ends_at_once() -> None:
+    async with ext() as (_, board):
+        await board.close()
+        changes = board.digital_changes(4)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(changes.__anext__(), 1)
+
+
+@pytest.mark.asyncio
+async def test_iterator_created_after_eof_ends_at_once() -> None:
+    async with ext() as (srv, board):
+        srv.drop()
+        await _until(lambda: board.closed)
+        changes = board.analog_changes(34)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(changes.__anext__(), 1)
+
+
 # --- the other report kinds --------------------------------------------------------------------------------------
 
 
@@ -195,7 +217,7 @@ async def test_stock_unconfigured_pin_report_ignored() -> None:
 @pytest.mark.asyncio
 async def test_stock_sonar_and_dht_configured_by_their_chains() -> None:
     got: list[object] = []
-    async with stock() as (srv, board):
+    async with stock(stock_sensors=True) as (srv, board):
         board.on_sonar(18, got.append)
         board.on_dht(21, got.append)
         srv.push(bytes([4, 10, 18, 0, 5]) + bytes([4, 11, 1, 21, 2]))

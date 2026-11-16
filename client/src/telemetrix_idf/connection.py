@@ -205,6 +205,7 @@ def connect(
     handshake_timeout: float = 3.0,
     timeout: float = 5.0,
     plugins: Sequence[type[Any]] = (),
+    stock_sensors: bool = False,
 ) -> BoardConnector:
     """Connect, handshake and (extended mode) discover the board.
 
@@ -215,24 +216,36 @@ def connect(
     refused discovery page. The socket is closed on every failure.
     `plugins` are the client plugin halves (plugins.py) bound to the board's plugins; anything but `PluginHalf`
     subclasses raises `TypeError` at once, two of the same name `ValueError`.
+    `stock_sensors=True` allows sonar and DHT in stock mode, at most 6 of each per session. Upstream's sensor counts
+    persist until the board is power-cycled, so power-cycle it between sessions that create sensors (README, "Stock
+    firmware hazards"). Without it they raise `NotSupported` in stock mode; extended mode ignores it.
     """
     check_halves(plugins)
 
     async def opener() -> Board:
-        return await _open(host, port, handshake_timeout, timeout, plugins)
+        return await _open(host, port, handshake_timeout, timeout, plugins, stock_sensors)
 
     return BoardConnector(opener)
 
 
-async def _open(host: str, port: int, handshake_timeout: float, timeout: float, plugins: Sequence[type[Any]]) -> Board:
+async def _open(
+    host: str,
+    port: int,
+    handshake_timeout: float,
+    timeout: float,
+    plugins: Sequence[type[Any]],
+    stock_sensors: bool = False,
+) -> Board:
     try:
         reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+    except asyncio.TimeoutError:
+        raise  # before OSError: on 3.11+ asyncio.TimeoutError is TimeoutError, an OSError
     except OSError as e:
         raise ConnectionLost(f"cannot connect to {host}:{port}: {e}") from e
     stats = Stats()
     conn = Connection(reader, writer, stats)
     try:
-        return await _handshake(conn, stats, handshake_timeout, timeout, plugins)
+        return await _handshake(conn, stats, handshake_timeout, timeout, plugins, stock_sensors)
     except BaseException:
         await conn.close()
         raise
@@ -249,7 +262,12 @@ def _match_firmware(rid: int, payload: bytes) -> wire.Firmware | ProtocolError |
 
 
 async def _handshake(
-    conn: Connection, stats: Stats, handshake_timeout: float, timeout: float, plugins: Sequence[type[Any]]
+    conn: Connection,
+    stats: Stats,
+    handshake_timeout: float,
+    timeout: float,
+    plugins: Sequence[type[Any]],
+    stock_sensors: bool = False,
 ) -> Board:
     answer = conn.expect(_match_firmware)
     conn.write(wire.get_firmware_version(wire.EXT_VERSION))
@@ -277,6 +295,7 @@ async def _handshake(
             stats=stats,
             plugin_halves=plugins,
             timeout=timeout,
+            stock_sensors=stock_sensors,
         )
 
     major, minor = fw.ext

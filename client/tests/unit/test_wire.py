@@ -126,6 +126,7 @@ BAD_ARGUMENTS = {
     "servo angle 181": lambda: wire.servo_write(1, 181),
     "i2c address 128": lambda: wire.i2c_read(128, 0, 1, True),
     "i2c count 60": lambda: wire.i2c_read(0x44, 0, 60, True),
+    "i2c count 0": lambda: wire.i2c_read(0x44, 0, 0, True),
     "i2c begin one pin": lambda: wire.i2c_begin(21),
     "i2c write of 29 bytes": lambda: wire.i2c_write(0x44, bytes(29)),
     "one-wire rom of 2 bytes": lambda: wire.one_wire_select(b"\x01\x02"),

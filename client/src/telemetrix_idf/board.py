@@ -14,6 +14,7 @@ from .discovery import BusInfo, ChipInfo, PinInfo, PluginInfo
 from .errors import ConnectionLost, IncompatiblePlugin, NotSupported, TelemetrixError
 from .events import AnalogEvent, DhtEvent, DigitalEvent, EventHub, EventStream, SonarEvent
 from .plugins import PluginHalf, check_halves
+from .stock import STOCK_SENSOR_MAX
 
 if TYPE_CHECKING:
     from .connection import Connection
@@ -59,6 +60,7 @@ class Board:
         stats: Stats,
         plugin_halves: Sequence[type[Any]] = (),
         timeout: float = 5.0,
+        stock_sensors: bool = False,
     ) -> None:
         self.connection = connection
         self.mode: Literal["extended", "stock"] = mode
@@ -74,6 +76,9 @@ class Board:
         self.timeout = timeout
         self._pin_kinds: dict[int, str] = {}  # what this client last set each pin up as
         self._pwm_channels: dict[int, int] = {}  # pin -> LEDC channel named in PWM mode
+        self._stock_sensors = stock_sensors  # stock: sonar/DHT allowed (connect(stock_sensors=True))
+        self._sensors_sent = {"sonar": 0, "dht": 0}  # stock: sensors written this session
+        self._ow_init_sent = False  # stock: a 1-wire init written this session
         self._chains = ChainEngine(connection, stats, extended=mode == "extended")
         self._events = EventHub(stats, only_configured=mode == "stock")
         self._halves: dict[str, PluginHalf] = {}
@@ -187,6 +192,38 @@ class Board:
                 self._pin_kinds.pop(gpio, None)
             else:
                 self._pin_kinds[gpio] = before
+
+        return undo
+
+    def _stock_ow_gate(self, op: Any) -> None:
+        """Stock: refuse a 1-wire op before an init was written (upstream reboots on a null OneWire)."""
+        if not self._ow_init_sent:
+            raise NotSupported(
+                f"1-wire {op.name}() before init: stock firmware dereferences a null OneWire and reboots"
+            )
+
+    def _stock_ow_init(self, op: Any) -> Callable[[], None]:
+        """Stock: record the session's one 1-wire init; a second raises `ValueError` (upstream leaks a OneWire)."""
+        if self._ow_init_sent:
+            raise ValueError("1-wire init() already sent this session: stock firmware leaks a OneWire on every init")
+        self._ow_init_sent = True
+
+        def undo() -> None:
+            self._ow_init_sent = False
+
+        return undo
+
+    def _stock_sensor_count(self, op: Any) -> Callable[[], None]:
+        """Stock: count a sonar/DHT written this session; past `STOCK_SENSOR_MAX` of a kind raises `ValueError`."""
+        kind = op.name
+        if self._sensors_sent[kind] >= STOCK_SENSOR_MAX:
+            raise ValueError(
+                f"at most {STOCK_SENSOR_MAX} {kind} sensors per stock session: the firmware's array overflows"
+            )
+        self._sensors_sent[kind] += 1
+
+        def undo() -> None:
+            self._sensors_sent[kind] -= 1
 
         return undo
 

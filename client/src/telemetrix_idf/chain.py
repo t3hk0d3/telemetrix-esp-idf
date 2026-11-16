@@ -10,7 +10,10 @@ and a closing barrier in one write and completes when the board answers the barr
   consumed (Ruling R1). With abort on, a refused command makes the server skip every later one of the chain.
 - stock mode: `LOOP [tag]`, answered by `[2, 0, tag]`. Upstream reports only two refusals, which are matched:
   `SERVO_ATTACH` by `[6, pin]` (REFUSED EXHAUSTED) and an I2C read by `[8, 1, addr]` (REFUSED NO_ANSWER). Every other
-  stock refusal is silent: the command shows as done. Nothing is skipped.
+  stock refusal is silent: the command shows as done. Nothing is skipped. Stock hazards are refused before writing:
+  a 1-wire op other than init and CRC-8 before an init was sent this session (upstream dereferences a null OneWire
+  and reboots), a second init (each leaks a OneWire), and sonar/DHT without `connect(..., stock_sensors=True)` or
+  past 6 of a kind this session (upstream writes its 6-entry arrays unbounded).
 
 Replies are matched per kind (I2C read on a bus, 1-wire op on a bus and subtype) by a FIFO of the ops that expect
 them; an ERROR removes its op's expectation. A reply nothing expects is counted in `board.stats.unmatched_replies`
@@ -37,7 +40,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeVar, cast
 
 from . import wire
 from .errors import ChainError, ConnectionLost, NotSupported, ProtocolError, TelemetrixError
-from .stock import STOCK_PINS
+from .stock import STOCK_PINS, STOCK_SENSOR_MAX
 from .wire import Reason
 
 if TYPE_CHECKING:
@@ -321,6 +324,15 @@ def _ow_rom(payload: bytes) -> bytes | None:
 
 # --- the chain ---------------------------------------------------------------------------------------------------
 
+_OW_BEFORE_INIT = (
+    "1-wire {}() before init: stock firmware dereferences a null OneWire and reboots; send onewire().init(pin) first"
+)
+_OW_SECOND_INIT = "1-wire init() already sent this session: stock firmware leaks a OneWire on every init"
+_SENSOR_OPT_IN = (
+    "{}() in stock mode needs connect(..., stock_sensors=True): the firmware's sensor count persists until power-cycle"
+)
+_SENSOR_CAP = f"at most {STOCK_SENSOR_MAX} {{}} sensors per stock session: the firmware's array overflows past that"
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -345,7 +357,8 @@ class Chain:
 
     Targets: `pin(gpio)` for the pin methods, `i2c(bus)` for the I2C methods, `onewire(bus)` for the 1-wire methods.
     `write`, `read` and `reset` act on the current target: `write(level)` on a pin, `write(addr, data)` on I2C,
-    `write(byte, power=...)` on 1-wire; `reset()` on a 1-wire bus is a bus reset, otherwise the board's RESET.
+    `write(byte, power=...)` on 1-wire; `reset()` on a 1-wire bus is a bus reset, and on a chain without a target
+    (`board.chain().reset()`) the board's RESET.
     On a bus other than 0 the I2C and 1-wire commands go through ON_BUS (extended mode only).
 
     `await chain` returns the value of the last value-yielding op, or None. `await chain.run()` returns a
@@ -363,6 +376,8 @@ class Chain:
         self._atomic = True
         self._target: tuple[str, int] | None = None
         self._kinds: dict[int, str] = {}  # pin kinds set earlier in this chain
+        self._ow_init_here = False  # stock: a 1-wire init earlier in this chain
+        self._sensors_here = {"sonar": 0, "dht": 0}  # stock: sensors added earlier in this chain
         self._sent = False
         self._broken: Exception | None = None  # the error that discarded the chain
 
@@ -485,7 +500,7 @@ class Chain:
             return self._add("write", self._on_bus(n, wire.i2c_write(value, data)))
         if data is not None:
             raise ValueError("write(byte, power=False) on 1-wire takes one byte")
-        return self._add("write", self._on_bus(n, wire.one_wire_write(value, power)))
+        return self._add_op(self._stock_ow(_Op("write", self._on_bus(n, wire.one_wire_write(value, power)))))
 
     @_building
     def read(self, addr: int | None = None, reg: int = 0, n: int = 1, stop: bool = True) -> Chain:
@@ -504,10 +519,15 @@ class Chain:
 
     @_building
     def reset(self) -> Chain:
-        """On a 1-wire bus: a bus reset, yields presence (bool). Otherwise the board's RESET (extended mode only)."""
+        """On a 1-wire bus: a bus reset, yields presence (bool). On a chain without a target (`board.chain().reset()`):
+        the board's RESET (extended mode only). After `pin()` or `i2c()` it raises `ValueError`."""
         if self._target is not None and self._target[0] == "onewire":
             bus = self._target[1]
             return self._ow("reset", wire.one_wire_reset(), bus, wire.CMD.ONE_WIRE_RESET, _ow_presence)
+        if self._target is not None:
+            raise ValueError(
+                f"reset() on a {self._target[0]} target is ambiguous; the board's RESET is board.chain().reset()"
+            )
         if self._stock:
             self._discard(NotSupported("reset() needs extended mode; upstream reboots on RESET"))
         return self._add_op(_Op("reset", wire.reset(), on_send=[self._board._forget_pins]))
@@ -534,22 +554,28 @@ class Chain:
                 raise ValueError(f"init() needs a pin: 1-wire bus {bus} takes the client's pin")
             pin = fixed[0]
         self._stock_pin(pin, "input", "output")
-        return self._add("init", self._on_bus(bus, wire.one_wire_init(pin)))
+        op = _Op("init", self._on_bus(bus, wire.one_wire_init(pin)))
+        if self._stock:
+            if self._board._ow_init_sent or self._ow_init_here:
+                raise ValueError(_OW_SECOND_INIT)
+            self._ow_init_here = True
+            op.prepare = self._board._stock_ow_init
+        return self._add_op(op)
 
     @_building
     def select(self, rom: bytes) -> Chain:
         bus = self._bus("select", "onewire")
-        return self._add("select", self._on_bus(bus, wire.one_wire_select(rom)))
+        return self._add_op(self._stock_ow(_Op("select", self._on_bus(bus, wire.one_wire_select(rom)))))
 
     @_building
     def skip(self) -> Chain:
         bus = self._bus("skip", "onewire")
-        return self._add("skip", self._on_bus(bus, wire.one_wire_skip()))
+        return self._add_op(self._stock_ow(_Op("skip", self._on_bus(bus, wire.one_wire_skip()))))
 
     @_building
     def reset_search(self) -> Chain:
         bus = self._bus("reset_search", "onewire")
-        return self._add("reset_search", self._on_bus(bus, wire.one_wire_reset_search()))
+        return self._add_op(self._stock_ow(_Op("reset_search", self._on_bus(bus, wire.one_wire_reset_search()))))
 
     @_building
     def search(self) -> Chain:
@@ -559,12 +585,16 @@ class Chain:
 
     @_building
     def crc8(self, data: bytes) -> Chain:
-        """Yields the board's CRC-8 of `data`."""
+        """Yields the board's CRC-8 of `data` (needs no init, also in stock mode)."""
         bus = self._bus("crc8", "onewire")
-        return self._ow("crc8", wire.one_wire_crc8(data), bus, wire.CMD.ONE_WIRE_CRC8, _ow_byte)
+        op = _Op("crc8", self._on_bus(bus, wire.one_wire_crc8(data)), reply=("ow", bus, wire.CMD.ONE_WIRE_CRC8))
+        op.decode = _ow_byte
+        return self._add_op(op)
 
     async def search_all(self, timeout: float | None = None) -> list[bytes]:
-        """Every ROM on this chain's 1-wire bus: a search reset, then one search chain per device."""
+        """Every ROM on this chain's 1-wire bus: a search reset, then one search chain per device.
+
+        In stock mode it raises `NotSupported` before writing anything until an init was sent this session."""
         self._check_usable()
         bus = self._bus("search_all", "onewire")
         if self._ops:
@@ -582,14 +612,19 @@ class Chain:
 
     @_building
     def sonar(self, trig: int, echo: int) -> Chain:
+        """An HC-SR04. Stock mode: needs `connect(..., stock_sensors=True)`, at most 6 per session (see README)."""
+        self._stock_sensor("sonar")
         self._stock_pin(trig, "output")
         self._stock_pin(echo, "input")
-        return self._add("sonar", wire.sonar_new(trig, echo), event=("sonar", trig))
+        op = self._stock_sensor_op(_Op("sonar", wire.sonar_new(trig, echo)))
+        return self._add_op(op, event=("sonar", trig))
 
     @_building
     def dht(self, pin: int) -> Chain:
+        """A DHT sensor. Stock mode: needs `connect(..., stock_sensors=True)`, at most 6 per session (see README)."""
+        self._stock_sensor("dht")
         self._stock_pin(pin, "input", "output")
-        return self._add("dht", wire.dht_new(pin), event=("dht", pin))
+        return self._add_op(self._stock_sensor_op(_Op("dht", wire.dht_new(pin))), event=("dht", pin))
 
     @_building
     def reporting(self, enabled: bool) -> Chain:
@@ -672,7 +707,31 @@ class Chain:
         return self
 
     def _ow(self, name: str, inner: bytes, bus: int, sub: int, decode: Callable[[bytes], Any]) -> Chain:
-        return self._add_op(_Op(name, self._on_bus(bus, inner), reply=("ow", bus, sub), decode=decode))
+        return self._add_op(self._stock_ow(_Op(name, self._on_bus(bus, inner), reply=("ow", bus, sub), decode=decode)))
+
+    def _stock_ow(self, op: _Op) -> _Op:
+        """Stock mode: a 1-wire op other than init and CRC-8 needs an init sent this session, or earlier in this
+        chain (upstream calls `ow->...` on a null pointer and reboots). Checked now and again when written."""
+        if self._stock:
+            if not (self._board._ow_init_sent or self._ow_init_here):
+                self._discard(NotSupported(_OW_BEFORE_INIT.format(op.name)))
+            op.prepare = self._board._stock_ow_gate
+        return op
+
+    def _stock_sensor(self, kind: Literal["sonar", "dht"]) -> None:
+        """Stock mode: sensors need the opt-in, and at most `STOCK_SENSOR_MAX` of a kind per session."""
+        if not self._stock:
+            return
+        if not self._board._stock_sensors:
+            self._discard(NotSupported(_SENSOR_OPT_IN.format(kind)))
+        if self._board._sensors_sent[kind] + self._sensors_here[kind] >= STOCK_SENSOR_MAX:
+            raise ValueError(_SENSOR_CAP.format(kind))
+        self._sensors_here[kind] += 1
+
+    def _stock_sensor_op(self, op: _Op) -> _Op:
+        if self._stock:
+            op.prepare = self._board._stock_sensor_count
+        return op
 
     def _on_bus(self, bus: int, inner: bytes) -> bytes:
         return inner if bus == 0 else wire.on_bus(bus, inner)

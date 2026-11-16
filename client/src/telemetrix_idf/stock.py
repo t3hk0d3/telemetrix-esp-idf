@@ -12,7 +12,7 @@ from types import MappingProxyType
 from .discovery import BusInfo, Cap, PinInfo
 from .errors import IncompatibleFirmware
 
-__all__ = ["STOCK_BUSES", "STOCK_PINS", "check_stock_firmware", "stock_pins"]
+__all__ = ["STOCK_BUSES", "STOCK_PINS", "STOCK_SENSOR_MAX", "check_stock_firmware", "stock_pins"]
 
 # From telemetrix-esp32 2.1.1 (valid_gpio_input_pins, valid_gpio_output_pins, valid_analog_in_pins,
 # valid_servo_pins, valid_touch_pins), copied verbatim.
@@ -25,6 +25,10 @@ STOCK_PINS: Mapping[str, tuple[int, ...]] = MappingProxyType(
         "touch": (4, 12, 13, 14, 15, 27, 32, 33),
     }
 )
+
+# Telemetrix4Esp32 3.2.0 MAX_SONARS and MAX_DHTS: sonar_new/dht_new write sonars[]/dhts[] without a bound check, and
+# the counts live until the board is power-cycled (the client never sends RESET, which reboots).
+STOCK_SENSOR_MAX = 6
 
 # Upstream takes the I2C pins and the 1-wire pin from the client, on its only bus.
 STOCK_BUSES: tuple[BusInfo, ...] = (BusInfo("i2c", 0, None, None), BusInfo("one_wire", 0, None, None))

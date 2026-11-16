@@ -484,6 +484,29 @@ async def test_ext_reset_sends_reset() -> None:
         assert bytes(srv.raw[mark:]) == bytes([1, 20, 4, 57, 0, 0, 1])
 
 
+TARGETED_RESET: dict[str, Callable[[Board], Any]] = {
+    "pin": lambda board: board.pin(4).output().reset(),
+    "i2c": lambda board: board.i2c(0).reset(),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", TARGETED_RESET.values(), ids=TARGETED_RESET.keys())
+async def test_ext_reset_after_target_raises_value_error_nothing_written(call: Callable[[Board], Any]) -> None:
+    async with ext() as (srv, board, mark):
+        with pytest.raises(ValueError, match=r"board\.chain\(\)\.reset\(\)"):
+            await call(board)
+        await asyncio.sleep(0.02)
+        assert bytes(srv.raw[mark:]) == b""
+
+
+@pytest.mark.asyncio
+async def test_stock_reset_after_pin_target_raises_value_error() -> None:
+    async with stock() as (_, board, _):
+        with pytest.raises(ValueError, match=r"board\.chain\(\)\.reset\(\)"):
+            board.pin(4).output().reset()
+
+
 @pytest.mark.asyncio
 async def test_ext_pin_ops_bytes() -> None:
     async with ext() as (srv, board, mark):

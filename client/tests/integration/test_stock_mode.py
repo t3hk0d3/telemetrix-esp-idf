@@ -16,8 +16,8 @@ ROM = bytes([0x28, 1, 2, 3, 4, 5, 6])
 E = TypeVar("E")
 
 
-def board_of(srv: Server) -> BoardConnector:
-    return connect(LOCALHOST, srv.port, timeout=2.0)
+def board_of(srv: Server, *, stock_sensors: bool = False) -> BoardConnector:
+    return connect(LOCALHOST, srv.port, timeout=2.0, stock_sensors=stock_sensors)
 
 
 async def first(events: EventStream[E], match: Callable[[E], bool] = lambda e: True) -> E:
@@ -67,7 +67,7 @@ async def test_i2c_read_bus_0(stock_server: Server) -> None:
 
 @pytest.mark.asyncio
 async def test_dht_reading_of_pin_25(stock_server: Server) -> None:
-    async with board_of(stock_server) as board:
+    async with board_of(stock_server, stock_sensors=True) as board:
         changes = board.dht_changes(25)
         await board.chain().dht(25)
         event = await asyncio.wait_for(first(changes), 3)
@@ -76,7 +76,7 @@ async def test_dht_reading_of_pin_25(stock_server: Server) -> None:
 
 @pytest.mark.asyncio
 async def test_sonar_distance_100_cm(stock_server: Server) -> None:
-    async with board_of(stock_server) as board:
+    async with board_of(stock_server, stock_sensors=True) as board:
         changes = board.sonar_changes(26)
         await board.chain().sonar(26, 27)
         event = await asyncio.wait_for(first(changes), 2)
