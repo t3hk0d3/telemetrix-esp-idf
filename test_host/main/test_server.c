@@ -12,6 +12,7 @@
 #include "fake/tmx_drv_fake.h"
 #include "test_plugin.h"
 #include "tmx_adapter.h"
+#include "tmx_net.h"
 #include "unity.h"
 
 static uint16_t port;
@@ -529,4 +530,337 @@ TEST_CASE("server stop with a client in a plugin session: the release hooks run;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, telemetrix_plugin_emit_async(old, 0, NULL, 0));
     telemetrix_plugin_wake(old);
     close(c);
+}
+
+/* ---- net (extended) ---- */
+
+static const telemetrix_plugin_t *const echo_list[] = {&test_plugin_echo};
+static const uint8_t ext_hello[] = {4, TMX_CMD_GET_FIRMWARE_VERSION, TMX_EXT_MAGIC, 1, 0};
+
+/** A server with test.echo in slot 0. */
+static void start_ext_server(void)
+{
+    telemetrix_config_t cfg;
+    telemetrix_config_default(&cfg);
+    port = pick_port();
+    cfg.port = port;
+    cfg.plugins = echo_list;
+    cfg.n_plugins = 1;
+    test_plugin_reset();
+    (void)telemetrix_stop();            /* a server a failed test left behind must not fail the next one */
+    start_server(&cfg);
+}
+
+/** Dial and complete the handshake: the client is in extended mode when it returns. */
+static int dial_ext(void)
+{
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    TEST_ASSERT_EQUAL(sizeof(ext_hello), send(c, ext_hello, sizeof(ext_hello), 0));
+    uint8_t answer[8];
+    TEST_ASSERT_EQUAL(0, read_n(c, answer, sizeof(answer)));
+    return c;
+}
+
+/** read_n with a longer patience (about tries ticks). */
+static int read_n_long(int fd, uint8_t *buf, size_t n, int tries)
+{
+    int r = -1;
+    for (int i = 0; i < tries && r == -1; i += 300) {
+        r = read_n(fd, buf, n);
+    }
+    return r;
+}
+
+static telemetrix_status_t last_status;
+
+static bool status_violation_counted(void)
+{
+    return telemetrix_get_status(&last_status) == ESP_OK && last_status.protocol_violations == 1 &&
+           last_status.client[0] == '\0';
+}
+
+static void stop_and_close(int c)
+{
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on a handshake then 200 bytes of a 254-byte command in one send: the command is assembled "
+          "whole", "[server]")
+{
+    start_ext_server();
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    /* PLUGIN echo of 251 bytes: len 254 (id + slot + sub + 251), 255 bytes on the wire */
+    static uint8_t chunk[sizeof(ext_hello) + 255];
+    memcpy(chunk, ext_hello, sizeof(ext_hello));
+    uint8_t *cmd = chunk + sizeof(ext_hello);
+    cmd[0] = 254;
+    cmd[1] = TMX_CMD_PLUGIN;
+    cmd[2] = 0;
+    cmd[3] = 0;
+    for (int i = 0; i < 251; i++) {
+        cmd[4 + i] = (uint8_t)i;
+    }
+    TEST_ASSERT_EQUAL(sizeof(ext_hello) + 200, send(c, chunk, sizeof(ext_hello) + 200, 0));
+    settle();
+    TEST_ASSERT_EQUAL(55, send(c, cmd + 200, 55, 0));
+    static uint8_t got[8 + 255];
+    TEST_ASSERT_EQUAL(0, read_n(c, got, sizeof(got)));
+    const uint8_t head[] = {254, TMX_RPT_PLUGIN_REPORT, 0, 0};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(head, got + 8, sizeof(head));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(cmd + 4, got + 12, 251);
+    stop_and_close(c);
+}
+
+TEST_CASE("net (extended) on a len 0 violation: the client is reset with RST", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t zero[] = {0};
+    TEST_ASSERT_EQUAL(1, send(c, zero, 1, 0));
+    uint8_t one;
+    TEST_ASSERT_EQUAL(-3, read_n(c, &one, 1));
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on a len 0 violation: protocol_violations +1", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t zero[] = {0};
+    TEST_ASSERT_EQUAL(1, send(c, zero, 1, 0));
+    TEST_ASSERT_TRUE(wait_for(status_violation_counted));
+    close(c);
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on a len 0 violation: the client's pins go to their safe states", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t mode_out[] = {3, 1, 2, 1};
+    TEST_ASSERT_EQUAL(4, send(c, mode_out, sizeof(mode_out), 0));
+    settle();
+    tmx_fake_reset();
+    const uint8_t zero[] = {0};
+    TEST_ASSERT_EQUAL(1, send(c, zero, 1, 0));
+    TEST_ASSERT_TRUE(wait_for(status_violation_counted));
+    TEST_ASSERT_TRUE(calls_have("gpio_output(2,1)"));
+    close(c);
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on a len 0 violation: the plugins are released", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t zero[] = {0};
+    TEST_ASSERT_EQUAL(1, send(c, zero, 1, 0));
+    TEST_ASSERT_TRUE(wait_for(status_violation_counted));
+    TEST_ASSERT_EQUAL(1, test_plugin_releases());
+    close(c);
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on a len 0 violation: the next client is served in stock framing (its len 0 is dropped)",
+          "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t zero[] = {0};
+    TEST_ASSERT_EQUAL(1, send(c, zero, 1, 0));
+    TEST_ASSERT_TRUE(wait_for(status_violation_counted));
+    close(c);
+    c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    const uint8_t zero_then_loop[] = {0, 2, 0, 0x5a};
+    TEST_ASSERT_EQUAL(sizeof(zero_then_loop), send(c, zero_then_loop, sizeof(zero_then_loop), 0));
+    uint8_t reply[3];
+    TEST_ASSERT_EQUAL(0, read_n(c, reply, sizeof(reply)));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(zero_then_loop + 1, reply, sizeof(reply));
+    stop_and_close(c);
+}
+
+TEST_CASE("net (extended) on an id above 60: the rest of the chunk is not handled", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    tmx_fake_reset();
+    const uint8_t chunk[] = {1, 61, 3, 1, 2, 1, 3, 2, 2, 0};   /* id 61, then SET_PIN_MODE 2 output, write 2 low */
+    TEST_ASSERT_EQUAL(sizeof(chunk), send(c, chunk, sizeof(chunk), 0));
+    TEST_ASSERT_TRUE(wait_for(status_violation_counted));
+    TEST_ASSERT_FALSE(calls_have("gpio_set(2,0)"));
+    close(c);
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on a packet unfinished after 2000 ms: the client is reset with RST", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t partial[] = {3, 2, 2};                      /* DIGITAL_WRITE without its value byte */
+    TEST_ASSERT_EQUAL(sizeof(partial), send(c, partial, sizeof(partial), 0));
+    uint8_t one;
+    TEST_ASSERT_EQUAL(-3, read_n_long(c, &one, 1, 3000));
+    TEST_ASSERT_TRUE(wait_for(status_violation_counted));
+    close(c);
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on emit_async from a plugin task: the PLUGIN_REPORT reaches the client", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t sub2[] = {5, TMX_CMD_PLUGIN, 0, 2, 0x12, 0x34};
+    TEST_ASSERT_EQUAL(sizeof(sub2), send(c, sub2, sizeof(sub2), 0));
+    const uint8_t want[] = {6, TMX_RPT_PLUGIN_REPORT, 0, 2, 0x12, 0x34, TEST_PLUGIN_ASYNC_MARK};
+    uint8_t got[sizeof(want)];
+    TEST_ASSERT_EQUAL(0, read_n(c, got, sizeof(got)));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, got, sizeof(want));
+    stop_and_close(c);
+}
+
+TEST_CASE("net (extended) after the client left: emit_async on the plugin's ctx is ESP_ERR_INVALID_STATE", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t echo[] = {3, TMX_CMD_PLUGIN, 0, 0};
+    TEST_ASSERT_EQUAL(sizeof(echo), send(c, echo, sizeof(echo), 0));
+    uint8_t got[4];
+    TEST_ASSERT_EQUAL(0, read_n(c, got, sizeof(got)));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_plugin_emit_async(test_plugin_ctx(), 0, NULL, 0));
+    close(c);
+    TEST_ASSERT_TRUE(wait_for(client_gone));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, telemetrix_plugin_emit_async(test_plugin_ctx(), 0, NULL, 0));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_stop());
+}
+
+TEST_CASE("net (extended) on sub 5: the poll hook's PLUGIN_REPORT sub 9 reaches the client", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t sub5[] = {3, TMX_CMD_PLUGIN, 0, 5};
+    TEST_ASSERT_EQUAL(sizeof(sub5), send(c, sub5, sizeof(sub5), 0));
+    const uint8_t want[] = {3, TMX_RPT_PLUGIN_REPORT, 0, TEST_PLUGIN_TICK_SUB};
+    uint8_t got[sizeof(want)];
+    TEST_ASSERT_EQUAL(0, read_n(c, got, sizeof(got)));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, got, sizeof(want));
+    stop_and_close(c);
+}
+
+/* ---- status (extended) ---- */
+
+static bool status_extended(void)
+{
+    return telemetrix_get_status(&last_status) == ESP_OK && last_status.extended;
+}
+
+static bool status_one_error(void)
+{
+    return telemetrix_get_status(&last_status) == ESP_OK && last_status.error_reports == 1;
+}
+
+static bool status_plugin_counted(void)
+{
+    return telemetrix_get_status(&last_status) == ESP_OK && last_status.n_plugins == 1 &&
+           last_status.plugins[0].commands == 2;
+}
+
+TEST_CASE("status in an extended session: extended true", "[server]")
+{
+    start_ext_server();
+    int c = dial();
+    TEST_ASSERT_TRUE(wait_for(client_seen));
+    TEST_ASSERT_EQUAL(ESP_OK, telemetrix_get_status(&last_status));
+    TEST_ASSERT_FALSE(last_status.extended);
+    TEST_ASSERT_EQUAL(sizeof(ext_hello), send(c, ext_hello, sizeof(ext_hello), 0));
+    TEST_ASSERT_TRUE(wait_for(status_extended));
+    stop_and_close(c);
+}
+
+TEST_CASE("status after a refused command in an extended session: error_reports 1", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t write_absent[] = {3, 2, 40, 1};              /* DIGITAL_WRITE on a pin not in the profile */
+    TEST_ASSERT_EQUAL(sizeof(write_absent), send(c, write_absent, sizeof(write_absent), 0));
+    TEST_ASSERT_TRUE(wait_for(status_one_error));
+    stop_and_close(c);
+}
+
+/** test.echo: an echo and a refusal; then the status names the plugin and counts both. */
+static void plugin_two_commands(int c)
+{
+    const uint8_t cmds[] = {3, TMX_CMD_PLUGIN, 0, 0, 3, TMX_CMD_PLUGIN, 0, 1};
+    TEST_ASSERT_EQUAL(sizeof(cmds), send(c, cmds, sizeof(cmds), 0));
+    TEST_ASSERT_TRUE(wait_for(status_plugin_counted));
+}
+
+TEST_CASE("status with test.echo: the plugin's name and slot", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    plugin_two_commands(c);
+    TEST_ASSERT_EQUAL_STRING("test.echo", last_status.plugins[0].name);
+    TEST_ASSERT_EQUAL_UINT8(0, last_status.plugins[0].slot);
+    stop_and_close(c);
+}
+
+TEST_CASE("status with test.echo after an echo and a refusal: commands 2, refusals 1", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    plugin_two_commands(c);
+    TEST_ASSERT_EQUAL_UINT32(2, last_status.plugins[0].commands);
+    TEST_ASSERT_EQUAL_UINT32(1, last_status.plugins[0].refusals);
+    stop_and_close(c);
+}
+
+static bool status_overrun(void)
+{
+    return telemetrix_get_status(&last_status) == ESP_OK && last_status.n_plugins == 1 &&
+           last_status.plugins[0].overruns == 1;
+}
+
+TEST_CASE("status with test.echo after a 50 ms handler: overruns 1, max_us at least 50000", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t busy[] = {3, TMX_CMD_PLUGIN, 0, 4};
+    TEST_ASSERT_EQUAL(sizeof(busy), send(c, busy, sizeof(busy), 0));
+    TEST_ASSERT_TRUE(wait_for(status_overrun));
+    TEST_ASSERT_TRUE(last_status.plugins[0].max_us >= TEST_PLUGIN_BUSY_US);
+    stop_and_close(c);
+}
+
+static bool status_async_dropped(void)
+{
+    return telemetrix_get_status(&last_status) == ESP_OK && last_status.n_plugins == 1 &&
+           last_status.plugins[0].async_dropped == 1;
+}
+
+TEST_CASE("status with test.echo after an emit_async on a full ring: async_dropped 1", "[server]")
+{
+    start_ext_server();
+    int c = dial_ext();
+    const uint8_t echo[] = {3, TMX_CMD_PLUGIN, 0, 0};
+    TEST_ASSERT_EQUAL(sizeof(echo), send(c, echo, sizeof(echo), 0));
+    uint8_t got[4];
+    TEST_ASSERT_EQUAL(0, read_n(c, got, sizeof(got)));
+    /* above the network task's priority, so it cannot drain between the nine puts */
+    UBaseType_t prio = uxTaskPriorityGet(NULL);
+    vTaskPrioritySet(NULL, configMAX_PRIORITIES - 1);
+    esp_err_t last = ESP_OK;
+    for (int i = 0; i < TMX_EMIT_RING_ENTRIES + 1; i++) {
+        last = telemetrix_plugin_emit_async(test_plugin_ctx(), 0, NULL, 0);
+    }
+    vTaskPrioritySet(NULL, prio);
+    TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM, last);
+    TEST_ASSERT_TRUE(wait_for(status_async_dropped));
+    stop_and_close(c);
 }

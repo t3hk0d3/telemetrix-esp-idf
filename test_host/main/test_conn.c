@@ -463,3 +463,40 @@ TEST_CASE("flush that empties a nearly full queue with a report pending, then a 
     TEST_ASSERT_EQUAL_UINT8_ARRAY(want, sent, sizeof(want));
     conn_stop();
 }
+
+/* Extended-mode reports pass the queue whole: CAPABILITIES at most 255 bytes, BUS_REPORT 66. */
+
+static void queue_reply_of(size_t n, uint8_t id)
+{
+    static uint8_t r[TMX_EXT_REPORT_MAX];
+    r[0] = (uint8_t)(n - 1);
+    r[1] = id;
+    for (size_t i = 2; i < n; i++) {
+        r[i] = (uint8_t)i;
+    }
+    tmx_conn_queue(&conn, r, n, true, TMX_COALESCE_NONE, 0);
+}
+
+TEST_CASE("queue of a 255-byte CAPABILITIES reply: delivered whole", "[conn]")
+{
+    conn_start(4096);
+    queue_reply_of(255, TMX_RPT_CAPABILITIES);
+    TEST_ASSERT_EQUAL(255, tmx_conn_pending(&conn));
+    drain();
+    TEST_ASSERT_EQUAL(255, sent_n);
+    TEST_ASSERT_EQUAL_UINT8(254, sent[0]);
+    TEST_ASSERT_EQUAL_UINT8(254, sent[254]);
+    conn_stop();
+}
+
+TEST_CASE("queue of a 66-byte BUS_REPORT reply: delivered whole", "[conn]")
+{
+    conn_start(4096);
+    queue_reply_of(66, TMX_RPT_BUS_REPORT);
+    TEST_ASSERT_EQUAL(66, tmx_conn_pending(&conn));
+    drain();
+    TEST_ASSERT_EQUAL(66, sent_n);
+    TEST_ASSERT_EQUAL_UINT8(65, sent[0]);
+    TEST_ASSERT_EQUAL_UINT8(TMX_RPT_BUS_REPORT, sent[1]);
+    conn_stop();
+}

@@ -10,7 +10,7 @@ endif()
 
 # esp_err.h needs esp_compiler.h from the same IDF directory and, through it, an sdkconfig.h: shim/ supplies a minimal one.
 set(FUZZ_INCLUDES ${REPO}/include ${REPO}/src/proto ${REPO}/src/core ${REPO}/src/adapter ${REPO}/src/net
-    ${REPO}/src/drivers ${REPO}/src/drivers/fake
+    ${REPO}/src/drivers ${REPO}/src/drivers/fake ${REPO}/test_host/main
     ${IDF_PATH}/components/esp_common/include ${CMAKE_CURRENT_LIST_DIR}/shim)
 file(GLOB PROTO_SRCS ${REPO}/src/proto/*.c)
 file(GLOB CORE_SRCS ${REPO}/src/core/*.c)
@@ -31,3 +31,5 @@ endfunction()
 add_fuzz_target(fuzz_frame ${PROTO_SRCS})
 add_fuzz_target(fuzz_adapter ${PROTO_SRCS} ${CORE_SRCS} ${ADAPTER_SRCS} ${FAKE_SRCS} ${PLUGIN_SRCS})
 target_link_libraries(fuzz_adapter PRIVATE pthread)
+add_fuzz_target(fuzz_session ${PROTO_SRCS} ${CORE_SRCS} ${ADAPTER_SRCS} ${FAKE_SRCS} ${PLUGIN_SRCS})
+target_link_libraries(fuzz_session PRIVATE pthread)

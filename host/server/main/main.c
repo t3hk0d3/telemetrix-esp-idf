@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "fake/tmx_drv_fake.h"
 #include "host_profile.h"
+#include "test_plugin.h"
 #include "telemetrix.h"
 
 #define MAX_ARGS 32
@@ -33,7 +34,7 @@ static void on_status(int sig)
 
 static void usage(const char *why)
 {
-    fprintf(stderr, "%s\nusage: host_server --port N [--allow CIDR]... [--stall-ms N]\n", why);
+    fprintf(stderr, "%s\nusage: host_server --port N [--allow CIDR]... [--stall-ms N] [--stock-only] [--test-plugin]\n", why);
     exit(2);
 }
 
@@ -83,10 +84,12 @@ static void print_status(void)
     telemetrix_status_t st;
     if (telemetrix_get_status(&st) == ESP_OK) {
         printf("status client=%s refused_connections=%u dropped_packets=%u ignored_commands=%u refused_commands=%u "
-               "coalesced_reports=%u stalled_clients=%u ledc_attach=%u ledc_duty=%u\n", st.client[0] ? st.client : "-",
+               "coalesced_reports=%u stalled_clients=%u ledc_attach=%u ledc_duty=%u extended=%d protocol_violations=%u "
+               "error_reports=%u\n", st.client[0] ? st.client : "-",
                (unsigned)st.refused_connections, (unsigned)st.dropped_packets, (unsigned)st.ignored_commands,
                (unsigned)st.refused_commands, (unsigned)st.coalesced_reports, (unsigned)st.stalled_clients, (unsigned)tmx_fake_count("ledc_attach"),
-               (unsigned)tmx_fake_count("ledc_duty"));
+               (unsigned)tmx_fake_count("ledc_duty"), st.extended ? 1 : 0, (unsigned)st.protocol_violations,
+               (unsigned)st.error_reports);
         fflush(stdout);
     }
 }
@@ -100,9 +103,19 @@ void app_main(void)
     telemetrix_cidr_t allowed[MAX_ALLOWED];
     size_t n_allowed = 0;
     long port = -1;
+    bool test_plugin = false;
+    static const telemetrix_plugin_t *const plugins[] = {&test_plugin_echo};
 
     telemetrix_config_default(&cfg);
     for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--stock-only")) {
+            cfg.extended = false;
+            continue;
+        }
+        if (!strcmp(argv[i], "--test-plugin")) {
+            test_plugin = true;
+            continue;
+        }
         if (i + 1 >= argc) {
             usage("missing value");
         }
@@ -125,13 +138,17 @@ void app_main(void)
     cfg.port = (uint16_t)port;
     cfg.allowed = allowed;
     cfg.n_allowed = n_allowed;
+    if (test_plugin) {
+        cfg.plugins = plugins;
+        cfg.n_plugins = 1;
+    }
 
     signal(SIGTERM, on_stop);
     signal(SIGINT, on_stop);
     signal(SIGUSR2, on_status);
 
     host_script_fake();
-    if (telemetrix_start(host_profile(), &cfg, NULL) != ESP_OK) {
+    if (telemetrix_start(host_profile(test_plugin), &cfg, NULL) != ESP_OK) {
         fprintf(stderr, "telemetrix_start failed\n");
         exit(1);
     }

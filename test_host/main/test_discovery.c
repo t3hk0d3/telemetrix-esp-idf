@@ -199,7 +199,8 @@ TEST_CASE("GET_CAPABILITIES with two plugins: NAMED_CAP records in id order afte
     /* ids: vendor.led 0, vendor.motor 1, other.horn 2 */
     uint8_t want_head[] = {6, 11, 0, 'v', 'e', 'n', 'd', 'o', 'r', '.', 'l', 'e', 'd',
                            6, 13, 1, 'v', 'e', 'n', 'd', 'o', 'r', '.', 'm', 'o', 't', 'o', 'r',
-                           6, 11, 2, 'o', 't', 'h', 'e', 'r', '.', 'h', 'o', 'r', 'n'};
+                           6, 11, 2, 'o', 't', 'h', 'e', 'r', '.', 'h', 'o', 'r', 'n'
+                          };
     /* the chip record is 11 bytes */
     TEST_ASSERT_EQUAL_UINT8_ARRAY(want_head, r.rec + 11, sizeof(want_head));
     const uint8_t tail[] = {

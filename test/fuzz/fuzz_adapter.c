@@ -1,6 +1,7 @@
 /* libFuzzer target: the adapter on the fake driver with a full profile.
  * Input layout: byte 0 selects the profile variant (bit 0 I2C bus 0 fixed or chosen by the client, bit 1 1-wire
- * likewise, bit 2 no buses, bit 3 one RMT RX channel instead of two), byte 1 the sensor limits; the rest is a list of
+ * likewise, bit 2 no buses, bit 3 one RMT RX channel instead of two, bit 4 cfg.extended: a handshake packet can enter
+ * extended mode), byte 1 the sensor limits; the rest is a list of
  * operations [op][args...]: a stock packet, a fake completion, scripted DHT and sonar results, an injected driver
  * failure, a clock step, a poll or a release. */
 #include <stdint.h>
@@ -30,7 +31,7 @@ static void emit(const uint8_t *report, size_t n, bool reply, int8_t kind, uint1
     (void)reply;
     (void)kind;
     (void)key;
-    if (n < 2 || n > TMX_REPORT_MAX || report[0] != n - 1) {
+    if (n < 2 || n > TMX_EXT_REPORT_MAX - 1 || report[0] != n - 1) {
         abort();
     }
     volatile uint8_t sink = 0;
@@ -78,7 +79,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     build_profile(&profile, data[0]);
     telemetrix_config_t cfg = {
         .i2c_timeout_ms = 50, .analog_interval_floor_ms = 10, .max_dht = data[1] & 7, .max_sonar = (data[1] >> 3) & 7,
-        .max_servo = 4,
+        .max_servo = 4, .extended = (data[0] & 16) != 0,
     };
     tmx_fake_reset();
     tmx_completion_reset();

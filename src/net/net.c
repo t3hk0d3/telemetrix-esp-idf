@@ -42,9 +42,11 @@ struct tmx_server {
 
     uint32_t refused_connections;
     uint32_t stalled_clients;
+    uint32_t protocol_violations;
     uint32_t dropped_before;            /**< dropped packets of earlier clients */
     char peer[TELEMETRIX_PEER_MAX];
     telemetrix_status_t status;         /**< last published snapshot */
+    telemetrix_status_t scratch;        /**< the snapshot being built (1440 bytes on 32-bit): kept off the task stack */
 
     volatile bool stop, kick, done;
 };
@@ -264,15 +266,18 @@ static void build_status(const tmx_server_t *s, telemetrix_status_t *st)
     st->coalesced_reports = s->conn.coalesced;
     st->stalled_clients = s->stalled_clients;
     st->n_pins = tmx_adapter_pin_uses(&s->adapter, st->pins, sizeof(st->pins) / sizeof(st->pins[0]));
+    st->extended = tmx_adapter_extended(&s->adapter);
+    st->protocol_violations = s->protocol_violations;
+    st->error_reports = s->adapter.session.error_reports;
+    st->n_plugins = tmx_plugins_status(&s->adapter.plugins, st->plugins, TELEMETRIX_PLUGINS_MAX);
 }
 
 /** Publish the snapshot when it differs from the last one; the lock is taken only then. */
 static void publish_if_changed(tmx_server_t *s)
 {
-    telemetrix_status_t st;
-    build_status(s, &st);
-    if (memcmp(&st, &s->status, sizeof(st)) != 0 && tmx_api_publish(&st)) {
-        s->status = st;
+    build_status(s, &s->scratch);
+    if (memcmp(&s->scratch, &s->status, sizeof(s->scratch)) != 0 && tmx_api_publish(&s->scratch)) {
+        s->status = s->scratch;
     }
 }
 
@@ -285,6 +290,15 @@ static void packet_cb(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
 {
     tmx_server_t *s = ctx;
     tmx_adapter_packet(&s->adapter, id, payload, len, s->now);
+    if (tmx_adapter_mode_changed(&s->adapter)) {
+        /* from the next length byte on, even inside this chunk: extended framing, and plugins may emit async */
+        tmx_frame_set_mode(&s->frame, TMX_EXT_PAYLOAD_MAX, true);
+        tmx_emit_ring_bump(true);
+    }
+    if (tmx_adapter_violation(&s->adapter)) {
+        tmx_frame_halt(&s->frame);      /* nothing after the violating packet is handled; read_client closes */
+        return;
+    }
     /* per packet, so commands after a RESET in the same chunk meet freshly released hardware (the extended session and
      * its numbering continue) and every RESET calls the hook */
     if (tmx_adapter_reset_requested(&s->adapter)) {
@@ -310,7 +324,9 @@ static void drop_client(tmx_server_t *s, const char *why, bool abortive)
     s->client = -1;
     tmx_frame_abandon(&s->frame);
     s->dropped_before += s->frame.dropped;
+    tmx_frame_init(&s->frame, TMX_STOCK_PAYLOAD_MAX);   /* stock framing until the next client's handshake */
     tmx_adapter_session_end(&s->adapter);
+    tmx_emit_ring_bump(false);          /* async entries of this session are dropped, later puts refused */
     tmx_conn_reset(&s->conn);
     tmx_completion_reset();
     s->peer[0] = '\0';
@@ -359,8 +375,21 @@ static void accept_one(tmx_server_t *s)
     }
 }
 
+/** A framing violation of an extended session (len 0, an unfinished packet, an id above 60): the client is closed with
+ *  an RST and counted. True when one was seen. */
+static bool violated(tmx_server_t *s, const char **why, bool *abortive)
+{
+    if (!s->frame.violation && !tmx_adapter_violation(&s->adapter)) {
+        return false;
+    }
+    s->protocol_violations++;
+    *why = "protocol violation";
+    *abortive = true;
+    return true;
+}
+
 /** Read what the client sent. Returns false when the connection is over; *abortive is true when it failed rather than
- *  ended in order. */
+ *  ended in order (a protocol violation included). */
 static bool read_client(tmx_server_t *s, const char **why, bool *abortive)
 {
     uint8_t buf[RECV_CHUNK];
@@ -380,7 +409,7 @@ static bool read_client(tmx_server_t *s, const char **why, bool *abortive)
     }
     s->now = now_ms();
     tmx_frame_feed(&s->frame, buf, (size_t)r, s->now, packet_cb, s);
-    return true;
+    return !violated(s, why, abortive);
 }
 
 void tmx_server_task(void *arg)
@@ -399,7 +428,9 @@ void tmx_server_task(void *arg)
                 wait_ms = left ? left : 1;
             }
             tmx_conn_state_t st = tmx_conn_flush(&s->conn, s->client, s->now, s->cfg.send_stall_ms);
-            if (st == TMX_CONN_STALLED) {
+            if (violated(s, &why, &abortive)) {
+                /* a packet left unfinished for 2000 ms in an extended session */
+            } else if (st == TMX_CONN_STALLED) {
                 s->stalled_clients++;
                 why = "peer stopped reading";
             } else if (st == TMX_CONN_ERROR) {
@@ -447,6 +478,9 @@ void tmx_server_task(void *arg)
         }
         if (s->client >= 0 && n > 0 && FD_ISSET(s->client, &rd) && !read_client(s, &why, &abortive)) {
             drop_client(s, why, abortive);
+        }
+        if (s->client >= 0) {
+            tmx_emit_ring_drain(&s->adapter);   /* async plugin reports, queued before the next flush */
         }
         if (s->listener >= 0 && n > 0 && FD_ISSET(s->listener, &rd)) {
             accept_one(s);
