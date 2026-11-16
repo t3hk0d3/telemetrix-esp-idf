@@ -17,7 +17,7 @@ help: ## List the targets
 lint: ## astyle and ruff through pre-commit
 	uvx pre-commit run --all-files
 
-test-host: ## Host unit tests on the ESP-IDF linux target
+test-host: ## Host unit tests on the ESP-IDF linux target (every feature on, then every feature off)
 	$(IDF) tools/run_host_tests.sh
 
 FUZZ_BUILD ?= test/fuzz/build

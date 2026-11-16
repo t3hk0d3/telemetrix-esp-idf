@@ -13,6 +13,26 @@
 #else
 #define SERVO_ENABLED false
 #endif
+#ifdef CONFIG_TELEMETRIX_I2C
+#define I2C_ENABLED true
+#else
+#define I2C_ENABLED false
+#endif
+#ifdef CONFIG_TELEMETRIX_SONAR
+#define SONAR_ENABLED true
+#else
+#define SONAR_ENABLED false
+#endif
+#ifdef CONFIG_TELEMETRIX_DHT
+#define DHT_ENABLED true
+#else
+#define DHT_ENABLED false
+#endif
+#ifdef CONFIG_TELEMETRIX_ONE_WIRE
+#define ONE_WIRE_ENABLED true
+#else
+#define ONE_WIRE_ENABLED false
+#endif
 
 int tmx_adapter_pin_index(const tmx_adapter_t *a, uint8_t gpio)
 {
@@ -230,6 +250,23 @@ static bool servo_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p)
     }
 }
 
+/** A command of a feature switched off in Kconfig: ignored and counted like an id out of scope. */
+static bool switched_off(uint8_t id, const uint8_t *p)
+{
+    switch (id) {
+    case TMX_CMD_SET_PIN_MODE: return p[1] == TMX_MODE_ANALOG && !ANALOG_ENABLED;
+    case TMX_CMD_SERVO_ATTACH:
+    case TMX_CMD_SERVO_WRITE:
+    case TMX_CMD_SERVO_DETACH: return !SERVO_ENABLED;
+    case TMX_CMD_I2C_BEGIN:
+    case TMX_CMD_I2C_READ:
+    case TMX_CMD_I2C_WRITE: return !I2C_ENABLED;
+    case TMX_CMD_SONAR_NEW: return !SONAR_ENABLED;
+    case TMX_CMD_DHT_NEW: return !DHT_ENABLED;
+    default: return id >= TMX_CMD_ONE_WIRE_INIT && id <= TMX_CMD_ONE_WIRE_CRC8 && !ONE_WIRE_ENABLED;
+    }
+}
+
 void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms)
 {
     switch (tmx_stock_check(id, payload, len)) {
@@ -242,6 +279,10 @@ void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, si
     default:
         break;
     }
+    if (switched_off(id, payload)) {
+        a->ignored_commands++;
+        return;
+    }
     const uint8_t *p = payload;
     uint8_t out[TMX_REPORT_MAX];
     bool ok = true;
@@ -250,10 +291,6 @@ void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, si
         tmx_adapter_emit(a, out, tmx_rpt_loop(out, p[0]), true, TMX_COALESCE_NONE, 0);
         break;
     case TMX_CMD_SET_PIN_MODE:
-        if (p[1] == TMX_MODE_ANALOG && !ANALOG_ENABLED) {
-            a->ignored_commands++;
-            return;
-        }
         ok = known_mode(p[1]) && set_pin_mode(a, p);
         break;
     case TMX_CMD_DIGITAL_WRITE:
@@ -271,10 +308,6 @@ void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, si
     case TMX_CMD_SERVO_ATTACH:
     case TMX_CMD_SERVO_WRITE:
     case TMX_CMD_SERVO_DETACH:
-        if (!SERVO_ENABLED) {
-            a->ignored_commands++;
-            return;
-        }
         ok = servo_command(a, id, p);
         break;
     case TMX_CMD_STOP_ALL_REPORTS:

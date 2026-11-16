@@ -101,7 +101,9 @@ has released everything), `connected(peer, ctx)`, `disconnected(ctx)`.
 `stalled_clients`, and what each claimed pin is used for. `telemetrix_kick_client` drops the current client.
 
 **Build switches** (menuconfig, "Telemetrix"): `CONFIG_TELEMETRIX_DHT`, `_SONAR`, `_ONE_WIRE`, `_SERVO`, `_I2C`,
-`_ANALOG`, each on by default.
+`_ANALOG`, each on by default. The commands of a switched-off feature are ignored and counted in `ignored_commands`,
+like an id out of scope: DHT `DHT_NEW` (13), sonar `SONAR_NEW` (12), 1-wire ids 27-35, servo ids 6-8, I2C ids 9-11,
+analog `SET_PIN_MODE` mode 3.
 
 ## The stock protocol
 
@@ -226,7 +228,8 @@ pin when the queue is full, sonar and DHT keep the latest reading per device.
 `make help` lists the targets; see `STYLEGUIDE.md` for the conventions.
 
 - `make lint`: astyle and ruff through pre-commit.
-- `make test-host`: Unity tests on the IDF `linux` target.
+- `make test-host`: Unity tests on the IDF `linux` target, twice: `test_host/` with every feature on and
+  `test_host/features_off/` with every `CONFIG_TELEMETRIX_*` switch off.
 - `make fuzz`: libFuzzer on the frame assembler and the adapter (60 s per target).
 - `make host-server`: build the real server for `linux` with a fake driver layer.
 - `make test-integration`: pytest against the host server with the stock client, hostile clients, and the recording

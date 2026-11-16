@@ -1,0 +1,7 @@
+# Every optional feature off: their commands must be ignored and counted.
+# CONFIG_TELEMETRIX_DHT is not set
+# CONFIG_TELEMETRIX_SONAR is not set
+# CONFIG_TELEMETRIX_ONE_WIRE is not set
+# CONFIG_TELEMETRIX_SERVO is not set
+# CONFIG_TELEMETRIX_I2C is not set
+# CONFIG_TELEMETRIX_ANALOG is not set
