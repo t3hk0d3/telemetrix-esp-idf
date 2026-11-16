@@ -161,8 +161,9 @@ Ignored and counted (`ignored_commands`), payload consumed: 19 and 21 (DAC), 22-
 
 Timing: digital inputs are polled every 2 ms while any reports; analog every interval (default 19 ms, floor 10 ms);
 sonar one device per 33 ms in turn, echo timeout 25 ms, cm = echo_us / 58, reported only on change; DHT every 2000 ms,
-all devices, DHT22/AM2302 decoding. `DHT_NEW` registers the device and schedules its first read at once; every failed
-read sends an error report and the device stays registered. Sonar and DHT never block the network task: a GPIO ISR
+all devices, DHT22/AM2302 decoding. `DHT_NEW` registers the device and schedules its first read at once, without
+reading the other devices early (no device is read twice within 2000 ms); every failed read sends an error report and
+the device stays registered. Sonar and DHT never block the network task: a GPIO ISR
 (sonar) or an RMT callback (DHT) completes them. The I2C timeout comes from the settings; 1-wire operations are bounded
 by their slot timing.
 

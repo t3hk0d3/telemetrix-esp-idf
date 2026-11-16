@@ -113,7 +113,13 @@ bool tmx_dht_new(tmx_adapter_t *a, uint8_t pin, uint32_t now_ms)
     }
     s->dht_rmt = true;
     s->dht_pin[s->n_dht++] = pin;
-    if (!s->dht_cycle) {    /* the first read of a new device is not left waiting for the 2000 ms pass */
+    /* The first read of a new device is not left waiting for the 2000 ms pass: a running pass reaches it (it is last),
+     * else a pass starts now at the first device registered since, so devices read less than 2000 ms ago wait. */
+    if (!s->dht_cycle) {
+        if (!s->dht_from_new) {
+            s->dht_from_new = true;
+            s->dht_from = (uint8_t)(s->n_dht - 1);
+        }
         tmx_deadline_arm(&s->dht_pass, now_ms, 0);
     }
     return true;
@@ -182,7 +188,8 @@ static void dht_pass(tmx_adapter_t *a, uint32_t now_ms)
     tmx_sensors_t *s = &a->sensors;
     tmx_deadline_arm(&s->dht_pass, now_ms, TMX_DHT_PASS_MS);
     s->dht_cycle = true;        /* a pass still running after 2000 ms lost its completion: start over */
-    s->dht_cursor = 0;
+    s->dht_cursor = s->dht_from_new ? s->dht_from : 0;
+    s->dht_from_new = false;
     s->dht_busy = false;
     dht_advance(a);
 }

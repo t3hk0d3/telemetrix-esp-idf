@@ -77,6 +77,8 @@ typedef struct {
     bool dht_rmt;               /**< the shared RMT RX channel is claimed */
     bool dht_cycle;             /**< a pass over all devices is running */
     uint8_t dht_cursor;         /**< device being read, or the next to read */
+    bool dht_from_new;          /**< the armed pass starts at dht_from: devices registered while no pass ran */
+    uint8_t dht_from;
     bool dht_busy;
     tmx_deadline_t dht_pass;    /**< next 2000 ms pass */
 } tmx_sensors_t;

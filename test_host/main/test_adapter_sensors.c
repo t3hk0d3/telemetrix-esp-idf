@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #include "adapter_fixture.h"
 
 static const uint8_t frame_ok[5] = {0x02, 0x8C, 0x01, 0x5F, 0xEE};   /* 65.2 %, 35.1 C */
@@ -285,6 +287,71 @@ TEST_CASE("Two DHTs: read one at a time, the second starts when the first comple
     TEST_ASSERT_EQUAL(14, fx_reports[0].data[3]);
     TEST_ASSERT_EQUAL(15, fx_reports[1].data[3]);
     TEST_ASSERT_EQUAL(1, fx_reports[1].key);
+}
+
+/** How many dht_start calls named gpio. */
+static size_t dht_starts(uint8_t gpio)
+{
+    char needle[24];
+    snprintf(needle, sizeof(needle), "dht_start(%u,", gpio);
+    size_t n = 0;
+    for (const char *p = strstr(tmx_fake_calls(), needle); p; p = strstr(p + 1, needle)) {
+        n++;
+    }
+    return n;
+}
+
+TEST_CASE("DHT_NEW 500 ms after another DHT's read: only the new device is read at once", "[adapter]")
+{
+    fx_start();
+    tmx_fake_dht_frame(14, frame_ok, ESP_OK);
+    tmx_fake_dht_frame(15, frame_ok, ESP_OK);
+    FX_SEND(TMX_CMD_DHT_NEW, 0, 14);
+    tmx_adapter_poll(&fx_a, 0);
+    complete_and_poll(1);
+    FX_SEND(TMX_CMD_DHT_NEW, 500, 15);
+    tmx_adapter_poll(&fx_a, 500);
+    complete_and_poll(501);
+    TEST_ASSERT_EQUAL(1, dht_starts(14));       /* read 500 ms ago: not again yet */
+    TEST_ASSERT_EQUAL(1, dht_starts(15));
+}
+
+TEST_CASE("DHT_NEW while idle: no device is read again sooner than 2000 ms after its last read", "[adapter]")
+{
+    fx_start();
+    tmx_fake_dht_frame(14, frame_ok, ESP_OK);
+    tmx_fake_dht_frame(15, frame_ok, ESP_OK);
+    FX_SEND(TMX_CMD_DHT_NEW, 0, 14);
+    tmx_adapter_poll(&fx_a, 0);
+    complete_and_poll(1);
+    FX_SEND(TMX_CMD_DHT_NEW, 500, 15);
+    tmx_adapter_poll(&fx_a, 500);
+    complete_and_poll(501);
+    tmx_adapter_poll(&fx_a, 2499);
+    TEST_ASSERT_EQUAL(1, dht_starts(14));
+    TEST_ASSERT_EQUAL(1, dht_starts(15));
+    tmx_adapter_poll(&fx_a, 2500);              /* the next full pass, 2000 ms after the new device's read */
+    complete_and_poll(2501);
+    complete_and_poll(2502);
+    TEST_ASSERT_EQUAL(2, dht_starts(14));
+    TEST_ASSERT_EQUAL(2, dht_starts(15));
+}
+
+TEST_CASE("Two DHT_NEW after another DHT's read, before a poll: both new devices are read at once, the old one not",
+          "[adapter]")
+{
+    fx_start();
+    FX_SEND(TMX_CMD_DHT_NEW, 0, 14);
+    tmx_adapter_poll(&fx_a, 0);
+    complete_and_poll(1);
+    FX_SEND(TMX_CMD_DHT_NEW, 500, 15);
+    FX_SEND(TMX_CMD_DHT_NEW, 500, 16);
+    tmx_adapter_poll(&fx_a, 500);
+    complete_and_poll(501);
+    complete_and_poll(502);
+    TEST_ASSERT_EQUAL(1, dht_starts(14));
+    TEST_ASSERT_EQUAL(1, dht_starts(15));
+    TEST_ASSERT_EQUAL(1, dht_starts(16));
 }
 
 TEST_CASE("DHT_NEW over cfg.max_dht: refused_commands +1, nothing claimed", "[adapter]")
