@@ -12,6 +12,8 @@ esp_err_t esp_gpio_input(uint8_t gpio, bool pull_up, bool pull_down);
 esp_err_t esp_gpio_output(uint8_t gpio, bool level);
 void esp_gpio_set(uint8_t gpio, bool v);
 int esp_gpio_get(uint8_t gpio);
+/** Another peripheral took the pin over: the next gpio_input or gpio_output reconfigures it. */
+void esp_gpio_forget(uint8_t gpio);
 
 /* LEDC */
 esp_err_t esp_ledc_timer(uint8_t speed_mode, uint8_t timer, uint32_t freq_hz, uint8_t resolution);

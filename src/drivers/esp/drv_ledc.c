@@ -24,6 +24,7 @@ esp_err_t esp_ledc_attach(uint8_t speed_mode, uint8_t channel, uint8_t timer, ui
         .duty = 0,
         .hpoint = 0,
     };
+    esp_gpio_forget(gpio);
     return ledc_channel_config(&cfg);
 }
 

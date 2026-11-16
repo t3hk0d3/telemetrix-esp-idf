@@ -51,7 +51,9 @@ void esp_adc_deinit(void)
         if (units[i].handle && units[i].owned) {
             adc_oneshot_del_unit(units[i].handle);
         }
-        units[i] = (unit_state_t){0};
+        units[i] = (unit_state_t) {
+            0
+        };
     }
 }
 
@@ -64,7 +66,8 @@ esp_err_t esp_adc_read(uint8_t unit, uint8_t channel, int *raw)
     if (!u->handle) {
         return ESP_ERR_NOT_FOUND;
     }
-    if (!(u->configured & (1u << channel))) {
+    /* A handle of the application may be reconfigured behind our back, so its channels are configured on every read. */
+    if (!u->owned || !(u->configured & (1u << channel))) {
         const adc_oneshot_chan_cfg_t cfg = {
             .atten = ADC_ATTEN_DB_12,
             .bitwidth = ADC_BITWIDTH_DEFAULT,

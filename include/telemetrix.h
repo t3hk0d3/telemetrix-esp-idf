@@ -54,7 +54,8 @@ typedef struct {
 
 typedef struct {
     uint8_t unit;
-    /** application-owned adc_oneshot_unit_handle_t, or NULL: the component makes its own */
+    /** application-owned adc_oneshot_unit_handle_t, or NULL: the component makes its own. Channels the server reads are
+     *  configured at 12 dB on every read; the application must not depend on other settings for them. */
     void *handle;
 } telemetrix_adc_grant_t;
 
