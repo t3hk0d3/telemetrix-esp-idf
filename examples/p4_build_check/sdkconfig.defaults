@@ -1,0 +1,6 @@
+# The server's 2 ms digital poll needs 1 ms ticks.
+CONFIG_FREERTOS_HZ=1000
+# The server closes refused connections with an RST through SO_LINGER.
+CONFIG_LWIP_SO_LINGER=y
+# Compiler default errors stay on.
+CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=n

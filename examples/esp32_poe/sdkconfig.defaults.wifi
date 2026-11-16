@@ -1,0 +1,2 @@
+# Layered over sdkconfig.defaults: SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.wifi"
+CONFIG_EXAMPLE_NETWORK_WIFI=y

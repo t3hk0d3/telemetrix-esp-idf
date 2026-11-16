@@ -1,10 +1,20 @@
+#include "board_profile.h"
+#include "esp_log.h"
+#include "network.h"
 #include "telemetrix.h"
 
-/* Minimal build check: an empty profile, no network bring-up yet. */
+static const char *TAG = "example";
+
 void app_main(void)
 {
-    static const telemetrix_profile_t profile = {0};
+    ESP_ERROR_CHECK(example_network_start());
+
     telemetrix_config_t config;
     telemetrix_config_default(&config);
-    telemetrix_start(&profile, &config, NULL);
+    const esp_err_t err = telemetrix_start(&board_profile, &config, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "telemetrix_start: %s", esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGI(TAG, "Telemetrix server listening on port %u", config.port);
 }

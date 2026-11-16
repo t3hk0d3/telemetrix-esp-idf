@@ -1,0 +1,27 @@
+menu "Telemetrix example"
+
+    choice EXAMPLE_NETWORK
+        prompt "Network"
+        default EXAMPLE_NETWORK_ETHERNET
+        help
+            The board's LAN8720 Ethernet port or Wi-Fi station. The pin profile is the same for both.
+
+        config EXAMPLE_NETWORK_ETHERNET
+            bool "Ethernet (LAN8720)"
+        config EXAMPLE_NETWORK_WIFI
+            bool "Wi-Fi station"
+    endchoice
+
+    config EXAMPLE_WIFI_SSID
+        string "Wi-Fi SSID"
+        depends on EXAMPLE_NETWORK_WIFI
+        default "myssid"
+
+    config EXAMPLE_WIFI_PASSWORD
+        string "Wi-Fi password"
+        depends on EXAMPLE_NETWORK_WIFI
+        default "mypassword"
+        help
+            An empty password connects to an open network.
+
+endmenu

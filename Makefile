@@ -49,10 +49,16 @@ $(VENV)/.installed: tools/compat/requirements.txt
 test-integration: host-server $(VENV)/.installed ## pytest integration tests against the host server
 	$(VENV)/bin/python -m pytest tools/tests
 
-build-examples: ## Build every example for the targets it lists
-	for ex in examples/*; do \
-		for t in $$(cat $$ex/targets); do \
-			$(IDF) idf.py -C $$ex -B $$ex/build-$$t -DIDF_TARGET=$$t \
-				-DSDKCONFIG=$(CURDIR)/$$ex/build-$$t/sdkconfig build; \
-		done; \
-	done
+# One build per line: example, target, build directory suffix, SDKCONFIG_DEFAULTS (empty = the example's own default).
+define build_example
+	$(IDF) idf.py -C examples/$(1) -B examples/$(1)/build-$(2) -DIDF_TARGET=$(3) \
+		-DSDKCONFIG=$(CURDIR)/examples/$(1)/build-$(2)/sdkconfig $(4) build
+
+endef
+
+build-examples: ## Build the board examples (ESP32-POE Ethernet and Wi-Fi, S3 and C6 DevKitC, P4 build check)
+	$(call build_example,esp32_poe,esp32-eth,esp32,)
+	$(call build_example,esp32_poe,esp32-wifi,esp32,"-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.wifi")
+	$(call build_example,devkit_wifi,esp32s3,esp32s3,)
+	$(call build_example,devkit_wifi,esp32c6,esp32c6,)
+	$(call build_example,p4_build_check,esp32p4,esp32p4,)

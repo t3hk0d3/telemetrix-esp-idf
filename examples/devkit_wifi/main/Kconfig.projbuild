@@ -1,0 +1,13 @@
+menu "Telemetrix example"
+
+    config EXAMPLE_WIFI_SSID
+        string "Wi-Fi SSID"
+        default "myssid"
+
+    config EXAMPLE_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default "mypassword"
+        help
+            An empty password connects to an open network.
+
+endmenu
