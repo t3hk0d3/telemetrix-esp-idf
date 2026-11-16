@@ -68,10 +68,7 @@ static inline void fx_start_buses(const telemetrix_i2c_bus_t *i2c, const telemet
         .adc = fx_adc, .n_adc = 1,
         .i2c = i2c, .n_i2c = i2c ? 1 : 0, .onewire = ow, .n_onewire = ow ? 1 : 0,
     };
-    /* the defaults the adapter reads (telemetrix_config_default arrives with the public API) */
-    fx_cfg = (telemetrix_config_t) {
-        .i2c_timeout_ms = 50, .analog_interval_floor_ms = 10, .max_dht = 6, .max_sonar = 6, .max_servo = 4,
-    };
+    telemetrix_config_default(&fx_cfg);
     tmx_fake_reset();
     tmx_completion_reset();
     fx_n_reports = 0;

@@ -103,7 +103,8 @@ typedef struct {
 void tmx_completion_post(const tmx_completion_t *c);
 /** Dequeue the oldest completion; false when empty. Network task only. */
 bool tmx_completion_take(tmx_completion_t *out);
-/** Register the function that tmx_completion_post calls after queueing; NULL restores the no-op. */
+/** Register the function that tmx_completion_post calls after queueing; NULL restores the no-op. The function must be
+ *  safe to call from an ISR (tmx_net_wake is: an eventfd write). */
 void tmx_completion_set_wake(void (*fn)(void));
 /** Drop queued completions and zero the overflow count; the wake function stays. */
 void tmx_completion_reset(void);

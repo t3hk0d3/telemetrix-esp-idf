@@ -494,3 +494,5 @@ const tmx_drv_t tmx_drv_fake = {
     .init = f_init,
     .deinit = f_deinit,
 };
+
+const tmx_drv_t *const tmx_drv_default = &tmx_drv_fake;

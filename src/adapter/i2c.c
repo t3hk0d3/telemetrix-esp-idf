@@ -57,7 +57,7 @@ static bool begin(tmx_adapter_t *a, const uint8_t *p, size_t len)
     return true;
 }
 
-static bool read(tmx_adapter_t *a, const uint8_t *p)
+static bool i2c_read_cmd(tmx_adapter_t *a, const uint8_t *p)
 {
     size_t count = p[2] < I2C_READ_MAX ? p[2] : I2C_READ_MAX;
     if (!a->i2c.open || count == 0) {
@@ -71,7 +71,7 @@ static bool read(tmx_adapter_t *a, const uint8_t *p)
     return true;
 }
 
-static bool write(tmx_adapter_t *a, const uint8_t *p)
+static bool i2c_write_cmd(tmx_adapter_t *a, const uint8_t *p)
 {
     if (!a->i2c.open) {
         return false;
@@ -84,8 +84,8 @@ bool tmx_i2c_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len)
 {
     switch (id) {
     case TMX_CMD_I2C_BEGIN: return begin(a, p, len);
-    case TMX_CMD_I2C_READ: return read(a, p);
-    default: return write(a, p);
+    case TMX_CMD_I2C_READ: return i2c_read_cmd(a, p);
+    default: return i2c_write_cmd(a, p);
     }
 }
 
