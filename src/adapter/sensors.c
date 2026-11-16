@@ -15,28 +15,32 @@ static uint8_t limit(uint8_t configured)
     return configured < TMX_MAX_PINS ? configured : TMX_MAX_PINS;
 }
 
-/** An unclaimed profile pin with all the capabilities in need. */
-static bool pin_free(const tmx_adapter_t *a, uint8_t gpio, uint16_t need)
-{
-    const telemetrix_pin_t *pin = tmx_profile_pin(a->profile, gpio);
-    return pin && (pin->caps & need) == need && tmx_pin_use(&a->claims, gpio) == TMX_USE_NONE;
-}
-
 /* ---- sonar ---- */
 
-bool tmx_sonar_new(tmx_adapter_t *a, uint8_t trig, uint8_t echo, uint32_t now_ms)
+telemetrix_reason_t tmx_sonar_new(tmx_adapter_t *a, uint8_t trig, uint8_t echo, uint32_t now_ms)
 {
     tmx_sensors_t *s = &a->sensors;
-    if (s->n_sonar >= limit(a->cfg.max_sonar) || trig == echo || !pin_free(a, trig, TELEMETRIX_CAP_DOUT) ||
-            !pin_free(a, echo, TELEMETRIX_CAP_DIN)) {
-        return false;
+    if (s->n_sonar >= limit(a->cfg.max_sonar)) {
+        return TELEMETRIX_REASON_EXHAUSTED;
     }
-    if (tmx_claim_pin(&a->claims, trig, TMX_USE_SONAR_TRIG) != ESP_OK) {
-        return false;
+    if (trig == echo) {
+        return TELEMETRIX_REASON_BAD_ARGUMENT;
     }
-    if (tmx_claim_pin(&a->claims, echo, TMX_USE_SONAR_ECHO) != ESP_OK) {
+    telemetrix_reason_t why = tmx_adapter_pin_free(a, trig, TELEMETRIX_CAP_DOUT);
+    if (why == TELEMETRIX_REASON_NONE) {
+        why = tmx_adapter_pin_free(a, echo, TELEMETRIX_CAP_DIN);
+    }
+    if (why != TELEMETRIX_REASON_NONE) {
+        return why;
+    }
+    esp_err_t err = tmx_claim_pin(&a->claims, trig, TMX_USE_SONAR_TRIG);
+    if (err != ESP_OK) {
+        return tmx_adapter_claim_reason(err);
+    }
+    err = tmx_claim_pin(&a->claims, echo, TMX_USE_SONAR_ECHO);
+    if (err != ESP_OK) {
         tmx_release_pin(&a->claims, trig);
-        return false;
+        return tmx_adapter_claim_reason(err);
     }
     s->sonar_trig[s->n_sonar] = trig;
     s->sonar_echo[s->n_sonar] = echo;
@@ -44,7 +48,7 @@ bool tmx_sonar_new(tmx_adapter_t *a, uint8_t trig, uint8_t echo, uint32_t now_ms
     if (!s->sonar_slot.armed) {
         tmx_deadline_arm(&s->sonar_slot, now_ms, 0);
     }
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
 static void sonar_slot(tmx_adapter_t *a, uint32_t now_ms)
@@ -92,24 +96,29 @@ static void sonar_done(tmx_adapter_t *a, const tmx_completion_t *c)
 
 /* ---- DHT ---- */
 
-bool tmx_dht_new(tmx_adapter_t *a, uint8_t pin, uint32_t now_ms)
+telemetrix_reason_t tmx_dht_new(tmx_adapter_t *a, uint8_t pin, uint32_t now_ms)
 {
     tmx_sensors_t *s = &a->sensors;
-    if (s->n_dht >= limit(a->cfg.max_dht) || !pin_free(a, pin, TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_DOUT)) {
-        return false;
+    if (s->n_dht >= limit(a->cfg.max_dht)) {
+        return TELEMETRIX_REASON_EXHAUSTED;
+    }
+    telemetrix_reason_t why = tmx_adapter_pin_free(a, pin, TELEMETRIX_CAP_DIN | TELEMETRIX_CAP_DOUT);
+    if (why != TELEMETRIX_REASON_NONE) {
+        return why;
     }
     bool claimed_rmt = false;
     if (!s->dht_rmt) {     /* the DHTs share one RX channel */
         if (tmx_claim_rmt_rx(&a->claims) != ESP_OK) {
-            return false;
+            return TELEMETRIX_REASON_EXHAUSTED;
         }
         claimed_rmt = true;
     }
-    if (tmx_claim_pin(&a->claims, pin, TMX_USE_DHT) != ESP_OK) {
+    esp_err_t err = tmx_claim_pin(&a->claims, pin, TMX_USE_DHT);
+    if (err != ESP_OK) {
         if (claimed_rmt) {
             tmx_release_rmt_rx(&a->claims);
         }
-        return false;
+        return tmx_adapter_claim_reason(err);
     }
     s->dht_rmt = true;
     s->dht_pin[s->n_dht++] = pin;
@@ -122,7 +131,7 @@ bool tmx_dht_new(tmx_adapter_t *a, uint8_t pin, uint32_t now_ms)
         }
         tmx_deadline_arm(&s->dht_pass, now_ms, 0);
     }
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
 static void dht_error(tmx_adapter_t *a, uint8_t dev, uint8_t err)

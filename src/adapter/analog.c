@@ -17,33 +17,36 @@ void tmx_analog_forget(tmx_adapter_t *a, int idx)
     a->analog.last[idx] = 0;
 }
 
-bool tmx_analog_mode(tmx_adapter_t *a, uint8_t gpio, uint16_t differential, bool report)
+telemetrix_reason_t tmx_analog_mode(tmx_adapter_t *a, uint8_t gpio, uint16_t differential, bool report)
 {
-    if (!tmx_adapter_pin_ok(a, gpio, TMX_USE_ANALOG)) {
-        return false;
+    telemetrix_reason_t why = tmx_adapter_pin_check(a, gpio, TMX_USE_ANALOG);
+    if (why != TELEMETRIX_REASON_NONE) {
+        return why;
     }
     int idx = tmx_adapter_pin_index(a, gpio);
     if (tmx_pin_use(&a->claims, gpio) == TMX_USE_ANALOG) {
         tmx_analog_forget(a, idx);
     } else {
         tmx_adapter_retire(a, gpio);
-        if (tmx_claim_pin(&a->claims, gpio, TMX_USE_ANALOG) != ESP_OK) {
-            return false;
+        esp_err_t err = tmx_claim_pin(&a->claims, gpio, TMX_USE_ANALOG);
+        if (err != ESP_OK) {
+            return tmx_adapter_claim_reason(err);
         }
     }
     a->analog.report[idx] = report;
     a->analog.fresh[idx] = true;
     a->analog.differential[idx] = differential;
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
-bool tmx_analog_set_report(tmx_adapter_t *a, uint8_t gpio, bool on)
+telemetrix_reason_t tmx_analog_set_report(tmx_adapter_t *a, uint8_t gpio, bool on)
 {
-    if (tmx_pin_use(&a->claims, gpio) != TMX_USE_ANALOG) {
-        return false;
+    telemetrix_reason_t why = tmx_adapter_pin_state(a, gpio, TMX_USE_ANALOG);
+    if (why != TELEMETRIX_REASON_NONE) {
+        return why;
     }
     a->analog.report[tmx_adapter_pin_index(a, gpio)] = on;
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
 bool tmx_analog_wanted(const tmx_adapter_t *a)

@@ -15,10 +15,11 @@ void tmx_digital_forget(tmx_adapter_t *a, int idx)
     a->digital.last[idx] = false;
 }
 
-bool tmx_digital_mode(tmx_adapter_t *a, uint8_t gpio, tmx_use_t use, bool report)
+telemetrix_reason_t tmx_digital_mode(tmx_adapter_t *a, uint8_t gpio, tmx_use_t use, bool report)
 {
-    if (!tmx_adapter_pin_ok(a, gpio, use)) {
-        return false;
+    telemetrix_reason_t why = tmx_adapter_pin_check(a, gpio, use);
+    if (why != TELEMETRIX_REASON_NONE) {
+        return why;
     }
     int idx = tmx_adapter_pin_index(a, gpio);
     if (is_digital(tmx_pin_use(&a->claims, gpio))) {
@@ -26,10 +27,10 @@ bool tmx_digital_mode(tmx_adapter_t *a, uint8_t gpio, tmx_use_t use, bool report
     } else {
         tmx_adapter_retire(a, gpio);
     }
-    if (tmx_claim_pin(&a->claims, gpio, use) != ESP_OK) {
-        return false;
+    esp_err_t err = tmx_claim_pin(&a->claims, gpio, use);
+    if (err != ESP_OK) {
+        return tmx_adapter_claim_reason(err);
     }
-    esp_err_t err;
     if (use == TMX_USE_OUTPUT) {
         err = a->drv->gpio_output(gpio, false);
     } else {
@@ -37,30 +38,31 @@ bool tmx_digital_mode(tmx_adapter_t *a, uint8_t gpio, tmx_use_t use, bool report
     }
     if (err != ESP_OK) {
         tmx_release_pin(&a->claims, gpio);
-        return false;
+        return TELEMETRIX_REASON_HARDWARE;
     }
     a->digital.report[idx] = use != TMX_USE_OUTPUT && report;
     a->digital.fresh[idx] = true;
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
-bool tmx_digital_write(tmx_adapter_t *a, uint8_t gpio, bool level)
+telemetrix_reason_t tmx_digital_write(tmx_adapter_t *a, uint8_t gpio, bool level)
 {
-    if (tmx_pin_use(&a->claims, gpio) != TMX_USE_OUTPUT) {
-        return false;
+    telemetrix_reason_t why = tmx_adapter_pin_state(a, gpio, TMX_USE_OUTPUT);
+    if (why != TELEMETRIX_REASON_NONE) {
+        return why;
     }
     a->drv->gpio_set(gpio, level);
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
-bool tmx_digital_set_report(tmx_adapter_t *a, uint8_t gpio, bool on)
+telemetrix_reason_t tmx_digital_set_report(tmx_adapter_t *a, uint8_t gpio, bool on)
 {
     tmx_use_t use = tmx_pin_use(&a->claims, gpio);
     if (use < TMX_USE_INPUT || use > TMX_USE_INPUT_PULLDOWN) {
-        return false;
+        return tmx_adapter_pin_state(a, gpio, TMX_USE_INPUT);   /* never NONE: use is not an input */
     }
     a->digital.report[tmx_adapter_pin_index(a, gpio)] = on;
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
 bool tmx_digital_wanted(const tmx_adapter_t *a)

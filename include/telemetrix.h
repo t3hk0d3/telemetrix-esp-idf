@@ -122,6 +122,23 @@ typedef struct {
 
 void telemetrix_config_default(telemetrix_config_t *out);
 
+/** Why a command was refused; NONE = done. The values are wire values of the extended protocol. */
+typedef enum {
+    TELEMETRIX_REASON_NONE = 0,
+    TELEMETRIX_REASON_NO_SUCH_PIN = 1,      /**< the pin is not in the profile */
+    TELEMETRIX_REASON_NO_CAPABILITY = 2,    /**< the pin is in the profile but lacks the capability the use needs */
+    TELEMETRIX_REASON_PIN_BUSY = 3,         /**< the pin is claimed by another use */
+    TELEMETRIX_REASON_EXHAUSTED = 4,        /**< no LEDC channel or timer, RMT channel or device slot left */
+    TELEMETRIX_REASON_BAD_ARGUMENT = 5,     /**< short payload, value out of range, unknown mode, wrong state */
+    TELEMETRIX_REASON_BUS_UNKNOWN = 6,      /**< the bus is not in the profile */
+    TELEMETRIX_REASON_NOT_IN_SCOPE = 7,     /**< the command is not served by this server */
+    TELEMETRIX_REASON_HARDWARE = 8,         /**< the driver failed */
+    TELEMETRIX_REASON_NO_ANSWER = 9,        /**< the I2C device did not answer */
+    TELEMETRIX_REASON_PLUGIN = 10,          /**< a plugin refused; its own code follows */
+    TELEMETRIX_REASON_SKIPPED = 11,         /**< not executed: an earlier command of the batch was refused */
+    TELEMETRIX_REASON_NO_SUCH_SLOT = 12,    /**< no plugin in that slot */
+} telemetrix_reason_t;
+
 typedef struct {
     bool (*access)(const struct sockaddr *peer, void *ctx);   /**< NULL = allow */
     void (*reset)(void *ctx);

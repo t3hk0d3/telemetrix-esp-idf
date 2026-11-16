@@ -16,32 +16,35 @@ static const telemetrix_onewire_bus_t *stock_grant(const tmx_adapter_t *a)
     return NULL;
 }
 
-static bool init(tmx_adapter_t *a, const uint8_t *p)
+static telemetrix_reason_t init(tmx_adapter_t *a, const uint8_t *p)
 {
     const telemetrix_onewire_bus_t *grant = stock_grant(a);
     if (!grant) {
-        return false;
+        return TELEMETRIX_REASON_BUS_UNKNOWN;
     }
     if (a->onewire.open) {
-        return true;
+        return TELEMETRIX_REASON_NONE;
     }
     int gpio = grant->gpio >= 0 ? grant->gpio : p[0];
-    const telemetrix_pin_t *pin = tmx_profile_pin(a->profile, (uint8_t)gpio);
-    if (!pin || !(pin->caps & TELEMETRIX_CAP_ONE_WIRE) || tmx_pin_use(&a->claims, (uint8_t)gpio) != TMX_USE_NONE ||
-            tmx_claim_pin(&a->claims, (uint8_t)gpio, TMX_USE_ONE_WIRE) != ESP_OK) {
-        return false;
+    telemetrix_reason_t why = tmx_adapter_pin_free(a, gpio, TELEMETRIX_CAP_ONE_WIRE);
+    if (why != TELEMETRIX_REASON_NONE) {
+        return why;
+    }
+    esp_err_t err = tmx_claim_pin(&a->claims, (uint8_t)gpio, TMX_USE_ONE_WIRE);
+    if (err != ESP_OK) {
+        return tmx_adapter_claim_reason(err);
     }
     if (tmx_claim_rmt_rx(&a->claims) != ESP_OK) {
         tmx_release_pin(&a->claims, (uint8_t)gpio);
-        return false;
+        return TELEMETRIX_REASON_EXHAUSTED;
     }
     if (a->drv->ow_open(STOCK_BUS, (uint8_t)gpio) != ESP_OK) {
         tmx_release_rmt_rx(&a->claims);
         tmx_release_pin(&a->claims, (uint8_t)gpio);
-        return false;
+        return TELEMETRIX_REASON_HARDWARE;
     }
     a->onewire.open = true;
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
 /** Dallas/Maxim CRC-8: polynomial x^8 + x^5 + x^4 + 1, reflected, initial value 0. */
@@ -77,7 +80,7 @@ static void search(tmx_adapter_t *a)
     reply(a, TMX_CMD_ONE_WIRE_SEARCH, rom, sizeof(rom));
 }
 
-bool tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len)
+telemetrix_reason_t tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len)
 {
     (void)len;
     const tmx_drv_t *d = a->drv;
@@ -87,10 +90,10 @@ bool tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t 
     if (id == TMX_CMD_ONE_WIRE_CRC8) {     /* [n, bytes...]: the stock client's extra byte is ignored */
         uint8_t crc = crc8(p + 1, p[0]);
         reply(a, id, &crc, 1);
-        return true;
+        return TELEMETRIX_REASON_NONE;
     }
     if (!a->onewire.open) {
-        return false;
+        return TELEMETRIX_REASON_BAD_ARGUMENT;
     }
     switch (id) {
     case TMX_CMD_ONE_WIRE_RESET: {
@@ -122,7 +125,7 @@ bool tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t 
         search(a);
         break;
     }
-    return true;
+    return TELEMETRIX_REASON_NONE;
 }
 
 void tmx_onewire_release(tmx_adapter_t *a)

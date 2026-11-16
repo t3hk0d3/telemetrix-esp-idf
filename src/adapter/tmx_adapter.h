@@ -108,7 +108,14 @@ typedef struct tmx_adapter tmx_adapter_t;
  *  safe state. cfg is copied. ESP_ERR_INVALID_ARG for a NULL argument or a profile over 64 pins. */
 esp_err_t tmx_adapter_init(tmx_adapter_t *a, const telemetrix_profile_t *p, const telemetrix_config_t *cfg,
                            const tmx_drv_t *drv, tmx_emit_fn emit, void *ctx);
-/** Handle one stock packet (the tmx_packet_fn target). Short payloads count as refused, ignored ids as ignored. */
+/** The stock dispatch: length check, switched-off check, the command. Returns why it was refused, NONE when done.
+ *  A short payload is BAD_ARGUMENT; an id out of scope or switched off in Kconfig is NOT_IN_SCOPE. Replies of a
+ *  command that succeeded (LOOP, firmware, I2C data, 1-wire) are emitted; refusal reports and counters are not. */
+telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len,
+                                        uint32_t now_ms);
+/** Handle one stock packet (the tmx_packet_fn target): tmx_adapter_command, then the counters (NOT_IN_SCOPE counts as
+ *  ignored, any other refusal as refused) and upstream's refusal reports ([2,6,pin] for a servo attach with no
+ *  servo available, [3,8,1,addr] for an I2C read nobody answered; those two are not counted as refused). */
 void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms);
 /** Run the scans that are due and return the milliseconds until the next deadline, UINT32_MAX when none. */
 uint32_t tmx_adapter_poll(tmx_adapter_t *a, uint32_t now_ms);
@@ -123,29 +130,35 @@ bool tmx_adapter_reset_requested(tmx_adapter_t *a);
 
 /* ---- Internal: shared by the adapter's source files, not part of the adapter's contract. ---- */
 
-typedef enum { TMX_RES_OK, TMX_RES_REFUSED, TMX_RES_UNAVAILABLE } tmx_res_t;
-
 /* adapter.c */
 /** Profile index of a GPIO, -1 when it is not a profile pin. */
 int tmx_adapter_pin_index(const tmx_adapter_t *a, uint8_t gpio);
-/** True when the pin exists, has the capability the use needs and is not held by a feature outside digital, analog,
- *  PWM and servo. No side effects. */
-bool tmx_adapter_pin_ok(const tmx_adapter_t *a, uint8_t gpio, tmx_use_t use);
+/** NONE when the pin exists, has the capability the use needs and is not held by a feature outside digital, analog,
+ *  PWM and servo; else NO_SUCH_PIN, NO_CAPABILITY or PIN_BUSY. No side effects. */
+telemetrix_reason_t tmx_adapter_pin_check(const tmx_adapter_t *a, uint8_t gpio, tmx_use_t use);
+/** NONE when the pin exists, has all the capabilities in need and is unclaimed; else NO_SUCH_PIN, NO_CAPABILITY or
+ *  PIN_BUSY. gpio is an int so a grant's -1 or an out-of-range value is NO_SUCH_PIN. No side effects. */
+telemetrix_reason_t tmx_adapter_pin_free(const tmx_adapter_t *a, int gpio, uint16_t need);
+/** NONE when the pin is currently claimed for use; else NO_SUCH_PIN, PIN_BUSY (held by a feature outside digital,
+ *  analog, PWM and servo) or BAD_ARGUMENT (the pin is not in that mode). No side effects. */
+telemetrix_reason_t tmx_adapter_pin_state(const tmx_adapter_t *a, uint8_t gpio, tmx_use_t use);
+/** The reason for a failed tmx_claim_pin: NO_CAPABILITY, PIN_BUSY or HARDWARE. */
+telemetrix_reason_t tmx_adapter_claim_reason(esp_err_t err);
 /** Forget the pin's digital, analog, PWM and servo state, stop its LEDC channel and return it to its safe state. */
 void tmx_adapter_retire(tmx_adapter_t *a, uint8_t gpio);
 void tmx_adapter_emit(tmx_adapter_t *a, const uint8_t *report, size_t n, bool reply, int8_t kind, uint16_t key);
 
 /* digital.c */
-bool tmx_digital_mode(tmx_adapter_t *a, uint8_t gpio, tmx_use_t use, bool report);
-bool tmx_digital_write(tmx_adapter_t *a, uint8_t gpio, bool level);
-bool tmx_digital_set_report(tmx_adapter_t *a, uint8_t gpio, bool on);
+telemetrix_reason_t tmx_digital_mode(tmx_adapter_t *a, uint8_t gpio, tmx_use_t use, bool report);
+telemetrix_reason_t tmx_digital_write(tmx_adapter_t *a, uint8_t gpio, bool level);
+telemetrix_reason_t tmx_digital_set_report(tmx_adapter_t *a, uint8_t gpio, bool on);
 void tmx_digital_forget(tmx_adapter_t *a, int idx);
 bool tmx_digital_wanted(const tmx_adapter_t *a);
 void tmx_digital_scan(tmx_adapter_t *a);
 
 /* analog.c */
-bool tmx_analog_mode(tmx_adapter_t *a, uint8_t gpio, uint16_t differential, bool report);
-bool tmx_analog_set_report(tmx_adapter_t *a, uint8_t gpio, bool on);
+telemetrix_reason_t tmx_analog_mode(tmx_adapter_t *a, uint8_t gpio, uint16_t differential, bool report);
+telemetrix_reason_t tmx_analog_set_report(tmx_adapter_t *a, uint8_t gpio, bool on);
 void tmx_analog_forget(tmx_adapter_t *a, int idx);
 bool tmx_analog_wanted(const tmx_adapter_t *a);
 void tmx_analog_scan(tmx_adapter_t *a);
@@ -153,30 +166,30 @@ void tmx_analog_set_interval(tmx_adapter_t *a, uint32_t ms);
 uint32_t tmx_analog_default_interval(const tmx_adapter_t *a);
 
 /* pwm.c */
-bool tmx_pwm_mode(tmx_adapter_t *a, uint8_t gpio, uint8_t resolution, double freq_hz);
-bool tmx_pwm_write(tmx_adapter_t *a, uint8_t gpio, uint16_t value);
-bool tmx_pwm_attach(tmx_adapter_t *a, uint8_t gpio);
-bool tmx_pwm_detach(tmx_adapter_t *a, uint8_t gpio);
-tmx_res_t tmx_servo_attach(tmx_adapter_t *a, uint8_t gpio, uint16_t min_us, uint16_t max_us);
-bool tmx_servo_write(tmx_adapter_t *a, uint8_t gpio, uint8_t angle);
-bool tmx_servo_detach(tmx_adapter_t *a, uint8_t gpio);
+telemetrix_reason_t tmx_pwm_mode(tmx_adapter_t *a, uint8_t gpio, uint8_t resolution, double freq_hz);
+telemetrix_reason_t tmx_pwm_write(tmx_adapter_t *a, uint8_t gpio, uint16_t value);
+telemetrix_reason_t tmx_pwm_attach(tmx_adapter_t *a, uint8_t gpio);
+telemetrix_reason_t tmx_pwm_detach(tmx_adapter_t *a, uint8_t gpio);
+telemetrix_reason_t tmx_servo_attach(tmx_adapter_t *a, uint8_t gpio, uint16_t min_us, uint16_t max_us);
+telemetrix_reason_t tmx_servo_write(tmx_adapter_t *a, uint8_t gpio, uint8_t angle);
+telemetrix_reason_t tmx_servo_detach(tmx_adapter_t *a, uint8_t gpio);
 /** Stop the LEDC channel of a PWM or servo pin and forget its state; the claim itself stays. */
 void tmx_pwm_forget(tmx_adapter_t *a, int idx);
 
 /* i2c.c */
-/** I2C_BEGIN, I2C_READ, I2C_WRITE (ids 9-11); false = refused. */
-bool tmx_i2c_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len);
+/** I2C_BEGIN, I2C_READ, I2C_WRITE (ids 9-11). A read that no device answered is NO_ANSWER and emits nothing. */
+telemetrix_reason_t tmx_i2c_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len);
 /** Close bus 0 when open; the claims go with tmx_claims_release_all. */
 void tmx_i2c_release(tmx_adapter_t *a);
 
 /* onewire.c */
-/** ONE_WIRE_INIT .. ONE_WIRE_CRC8 (ids 27-35); false = refused. */
-bool tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len);
+/** ONE_WIRE_INIT .. ONE_WIRE_CRC8 (ids 27-35). */
+telemetrix_reason_t tmx_onewire_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p, size_t len);
 void tmx_onewire_release(tmx_adapter_t *a);
 
 /* sensors.c */
-bool tmx_sonar_new(tmx_adapter_t *a, uint8_t trig, uint8_t echo, uint32_t now_ms);
-bool tmx_dht_new(tmx_adapter_t *a, uint8_t pin, uint32_t now_ms);
+telemetrix_reason_t tmx_sonar_new(tmx_adapter_t *a, uint8_t trig, uint8_t echo, uint32_t now_ms);
+telemetrix_reason_t tmx_dht_new(tmx_adapter_t *a, uint8_t pin, uint32_t now_ms);
 /** Drain the completion queue and start the sonar ping and DHT read that are due. Never waits. */
 void tmx_sensors_poll(tmx_adapter_t *a, uint32_t now_ms);
 /** Milliseconds until the next sensor deadline, UINT32_MAX when none or while reports are stopped. */

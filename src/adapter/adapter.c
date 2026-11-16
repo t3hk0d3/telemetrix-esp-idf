@@ -58,15 +58,56 @@ static uint16_t caps_needed(tmx_use_t use)
     }
 }
 
-bool tmx_adapter_pin_ok(const tmx_adapter_t *a, uint8_t gpio, tmx_use_t use)
+static bool is_pin_mode(tmx_use_t use)
+{
+    return use >= TMX_USE_INPUT && use <= TMX_USE_SERVO;
+}
+
+telemetrix_reason_t tmx_adapter_pin_check(const tmx_adapter_t *a, uint8_t gpio, tmx_use_t use)
 {
     const telemetrix_pin_t *pin = tmx_profile_pin(a->profile, gpio);
     uint16_t need = caps_needed(use);
-    if (!pin || (pin->caps & need) != need) {
-        return false;
+    if (!pin) {
+        return TELEMETRIX_REASON_NO_SUCH_PIN;
+    }
+    if ((pin->caps & need) != need) {
+        return TELEMETRIX_REASON_NO_CAPABILITY;
     }
     tmx_use_t cur = tmx_pin_use(&a->claims, gpio);
-    return cur == TMX_USE_NONE || (cur >= TMX_USE_INPUT && cur <= TMX_USE_SERVO);
+    return cur == TMX_USE_NONE || is_pin_mode(cur) ? TELEMETRIX_REASON_NONE : TELEMETRIX_REASON_PIN_BUSY;
+}
+
+telemetrix_reason_t tmx_adapter_pin_free(const tmx_adapter_t *a, int gpio, uint16_t need)
+{
+    const telemetrix_pin_t *pin = gpio < 0 || gpio > UINT8_MAX ? NULL : tmx_profile_pin(a->profile, (uint8_t)gpio);
+    if (!pin) {
+        return TELEMETRIX_REASON_NO_SUCH_PIN;
+    }
+    if ((pin->caps & need) != need) {
+        return TELEMETRIX_REASON_NO_CAPABILITY;
+    }
+    return tmx_pin_use(&a->claims, (uint8_t)gpio) == TMX_USE_NONE ? TELEMETRIX_REASON_NONE : TELEMETRIX_REASON_PIN_BUSY;
+}
+
+telemetrix_reason_t tmx_adapter_pin_state(const tmx_adapter_t *a, uint8_t gpio, tmx_use_t use)
+{
+    tmx_use_t cur = tmx_pin_use(&a->claims, gpio);
+    if (cur == use) {
+        return TELEMETRIX_REASON_NONE;
+    }
+    if (!tmx_profile_pin(a->profile, gpio)) {
+        return TELEMETRIX_REASON_NO_SUCH_PIN;
+    }
+    return cur == TMX_USE_NONE || is_pin_mode(cur) ? TELEMETRIX_REASON_BAD_ARGUMENT : TELEMETRIX_REASON_PIN_BUSY;
+}
+
+telemetrix_reason_t tmx_adapter_claim_reason(esp_err_t err)
+{
+    switch (err) {
+    case ESP_ERR_NOT_SUPPORTED: return TELEMETRIX_REASON_NO_CAPABILITY;
+    case ESP_ERR_INVALID_STATE: return TELEMETRIX_REASON_PIN_BUSY;
+    default: return TELEMETRIX_REASON_HARDWARE;
+    }
 }
 
 void tmx_adapter_retire(tmx_adapter_t *a, uint8_t gpio)
@@ -204,8 +245,7 @@ static double decode_double_le(const uint8_t *p)
     return d;
 }
 
-/* Returns false for a refusal; ignored commands are counted by the caller's verdict. */
-static bool set_pin_mode(tmx_adapter_t *a, const uint8_t *p)
+static telemetrix_reason_t set_pin_mode(tmx_adapter_t *a, const uint8_t *p)
 {
     uint8_t pin = p[0];
     switch (p[1]) {
@@ -215,36 +255,30 @@ static bool set_pin_mode(tmx_adapter_t *a, const uint8_t *p)
     case TMX_MODE_OUTPUT: return tmx_digital_mode(a, pin, TMX_USE_OUTPUT, false);
     case TMX_MODE_ANALOG: return tmx_analog_mode(a, pin, (uint16_t)(p[2] << 8 | p[3]), p[4] != 0);
     case TMX_MODE_PWM: return tmx_pwm_mode(a, pin, p[3], decode_double_le(p + 4));
-    default: return false;
+    default: return TELEMETRIX_REASON_BAD_ARGUMENT;
     }
 }
 
-static bool modify_reporting(tmx_adapter_t *a, uint8_t mode, uint8_t pin)
+static telemetrix_reason_t modify_reporting(tmx_adapter_t *a, uint8_t mode, uint8_t pin)
 {
     switch (mode) {
     case 0:     /* upstream: every pin's reporting off, the pin byte ignored, the global flag untouched */
         memset(a->digital.report, 0, sizeof(a->digital.report));
         memset(a->analog.report, 0, sizeof(a->analog.report));
-        return true;
+        return TELEMETRIX_REASON_NONE;
     case 1: return tmx_analog_set_report(a, pin, true);
     case 2: return tmx_digital_set_report(a, pin, true);
     case 3: return tmx_analog_set_report(a, pin, false);
     case 4: return tmx_digital_set_report(a, pin, false);
-    default: return false;
+    default: return TELEMETRIX_REASON_BAD_ARGUMENT;
     }
 }
 
-static bool servo_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p)
+static telemetrix_reason_t servo_command(tmx_adapter_t *a, uint8_t id, const uint8_t *p)
 {
-    uint8_t out[TMX_REPORT_MAX];
     switch (id) {
-    case TMX_CMD_SERVO_ATTACH: {
-        tmx_res_t res = tmx_servo_attach(a, p[0], (uint16_t)(p[1] << 8 | p[2]), (uint16_t)(p[3] << 8 | p[4]));
-        if (res == TMX_RES_UNAVAILABLE) {
-            tmx_adapter_emit(a, out, tmx_rpt_servo_unavailable(out, p[0]), true, TMX_COALESCE_NONE, 0);
-        }
-        return res != TMX_RES_REFUSED;
-    }
+    case TMX_CMD_SERVO_ATTACH:
+        return tmx_servo_attach(a, p[0], (uint16_t)(p[1] << 8 | p[2]), (uint16_t)(p[3] << 8 | p[4]));
     case TMX_CMD_SERVO_WRITE: return tmx_servo_write(a, p[0], p[1]);
     default: return tmx_servo_detach(a, p[0]);
     }
@@ -267,40 +301,38 @@ static bool switched_off(uint8_t id, const uint8_t *p)
     }
 }
 
-void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms)
+telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len,
+                                        uint32_t now_ms)
 {
     switch (tmx_stock_check(id, payload, len)) {
     case TMX_STOCK_SHORT:
-        a->refused_commands++;
-        return;
+        return TELEMETRIX_REASON_BAD_ARGUMENT;
     case TMX_STOCK_IGNORED:
-        a->ignored_commands++;
-        return;
+        return TELEMETRIX_REASON_NOT_IN_SCOPE;
     default:
         break;
     }
     if (switched_off(id, payload)) {
-        a->ignored_commands++;
-        return;
+        return TELEMETRIX_REASON_NOT_IN_SCOPE;
     }
     const uint8_t *p = payload;
     uint8_t out[TMX_REPORT_MAX];
-    bool ok = true;
+    telemetrix_reason_t why = TELEMETRIX_REASON_NONE;
     switch (id) {
     case TMX_CMD_LOOP_COMMAND:
         tmx_adapter_emit(a, out, tmx_rpt_loop(out, p[0]), true, TMX_COALESCE_NONE, 0);
         break;
     case TMX_CMD_SET_PIN_MODE:
-        ok = known_mode(p[1]) && set_pin_mode(a, p);
+        why = known_mode(p[1]) ? set_pin_mode(a, p) : TELEMETRIX_REASON_BAD_ARGUMENT;
         break;
     case TMX_CMD_DIGITAL_WRITE:
-        ok = tmx_digital_write(a, p[0], p[1] != 0);
+        why = tmx_digital_write(a, p[0], p[1] != 0);
         break;
     case TMX_CMD_ANALOG_WRITE:
-        ok = tmx_pwm_write(a, p[0], (uint16_t)(p[1] << 8 | p[2]));
+        why = tmx_pwm_write(a, p[0], (uint16_t)(p[1] << 8 | p[2]));
         break;
     case TMX_CMD_MODIFY_REPORTING:
-        ok = modify_reporting(a, p[0], p[1]);
+        why = modify_reporting(a, p[0], p[1]);
         break;
     case TMX_CMD_GET_FIRMWARE_VERSION:
         tmx_adapter_emit(a, out, tmx_rpt_firmware(out), true, TMX_COALESCE_NONE, 0);
@@ -308,7 +340,7 @@ void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, si
     case TMX_CMD_SERVO_ATTACH:
     case TMX_CMD_SERVO_WRITE:
     case TMX_CMD_SERVO_DETACH:
-        ok = servo_command(a, id, p);
+        why = servo_command(a, id, p);
         break;
     case TMX_CMD_STOP_ALL_REPORTS:
         a->reporting = false;
@@ -320,10 +352,10 @@ void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, si
         tmx_analog_set_interval(a, p[0]);
         break;
     case TMX_CMD_ANALOG_OUT_ATTACH:
-        ok = tmx_pwm_attach(a, p[0]);
+        why = tmx_pwm_attach(a, p[0]);
         break;
     case TMX_CMD_ANALOG_OUT_DETACH:
-        ok = tmx_pwm_detach(a, p[0]);
+        why = tmx_pwm_detach(a, p[0]);
         break;
     case TMX_CMD_RESET:
         tmx_adapter_release(a);
@@ -332,22 +364,39 @@ void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, si
     case TMX_CMD_I2C_BEGIN:
     case TMX_CMD_I2C_READ:
     case TMX_CMD_I2C_WRITE:
-        ok = tmx_i2c_command(a, id, p, len);
+        why = tmx_i2c_command(a, id, p, len);
         break;
     case TMX_CMD_SONAR_NEW:
-        ok = tmx_sonar_new(a, p[0], p[1], now_ms);
+        why = tmx_sonar_new(a, p[0], p[1], now_ms);
         break;
     case TMX_CMD_DHT_NEW:
-        ok = tmx_dht_new(a, p[0], now_ms);
+        why = tmx_dht_new(a, p[0], now_ms);
         break;
     default:
         if (id >= TMX_CMD_ONE_WIRE_INIT && id <= TMX_CMD_ONE_WIRE_CRC8) {
-            ok = tmx_onewire_command(a, id, p, len);
+            why = tmx_onewire_command(a, id, p, len);
         }
         break;
     }
-    if (!ok) {
+    schedule(a, now_ms);
+    return why;
+}
+
+void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms)
+{
+    telemetrix_reason_t why = tmx_adapter_command(a, id, payload, len, now_ms);
+    uint8_t out[TMX_REPORT_MAX];
+    if (why == TELEMETRIX_REASON_NONE) {
+        return;
+    }
+    if (why == TELEMETRIX_REASON_NOT_IN_SCOPE) {
+        a->ignored_commands++;
+    } else if (why == TELEMETRIX_REASON_EXHAUSTED && id == TMX_CMD_SERVO_ATTACH) {
+        /* upstream's report; the command is not counted as refused */
+        tmx_adapter_emit(a, out, tmx_rpt_servo_unavailable(out, payload[0]), true, TMX_COALESCE_NONE, 0);
+    } else if (why == TELEMETRIX_REASON_NO_ANSWER && id == TMX_CMD_I2C_READ) {
+        tmx_adapter_emit(a, out, tmx_rpt_i2c_short(out, payload[0]), true, TMX_COALESCE_NONE, 0);
+    } else {
         a->refused_commands++;
     }
-    schedule(a, now_ms);
 }
