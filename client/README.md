@@ -29,10 +29,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`connect(host, port, *, handshake_timeout=3.0, timeout=5.0, plugins=())` returns a `BoardConnector`: await it for a
-`Board`, or use `async with` to close the connection on exit. The handshake asks for the extended protocol. Against
-this server the session enters extended mode and the client discovers the board; against upstream firmware it stays in
-stock mode.
+`connect(host, port, *, handshake_timeout=3.0, timeout=5.0, plugins=(), stock_sensors=False)` returns a
+`BoardConnector`: await it for a `Board`, or use `async with` to close the connection on exit. The handshake asks for
+the extended protocol. Against this server the session enters extended mode and the client discovers the board; against
+upstream firmware it stays in stock mode. `stock_sensors=True` allows sonar and DHT in stock mode (see Stock firmware
+hazards).
 
 - `board.mode` is `"extended"` or `"stock"`; `board.firmware` is the stock version triple; `board.protocol` is the
   extension version or `None`.
@@ -58,7 +59,9 @@ await board.chain().dht(25)
 await board.i2c(1).read(0x48, 0, 2)  # another bus: sent through ON_BUS (extended mode)
 ```
 
-- Targets: `pin(gpio)`, `i2c(bus)`, `onewire(bus)`. `write`, `read` and `reset` act on the current target.
+- Targets: `pin(gpio)`, `i2c(bus)`, `onewire(bus)`. `write`, `read` and `reset` act on the current target; `reset()`
+  on a 1-wire bus is a bus reset. The board's RESET is `board.chain().reset()`, on a chain without a target: after
+  `pin()` or `i2c()` it raises `ValueError`.
 - `await chain` returns the value of the last command that yields one (an I2C read, a 1-wire read or ROM search), or
   `None`. `await chain.run(timeout)` returns a `ChainResult` with every value and every command's `CommandResult`.
 - A chain is single-use. A building call that raises (a bad pin, a call that needs extended mode) discards the whole
@@ -75,7 +78,7 @@ of 300, a payload that cannot fit) is a plain `ValueError`.
 |---|---|
 | `ChainError` | A command was refused or skipped. `error.results` holds a `CommandResult` per command (`op`, `status` of `done`, `refused` or `skipped`, `reason`, `code`). |
 | `ConnectionLost` | The socket could not be opened, or closed while something was pending (chains, plugin requests). |
-| `asyncio.TimeoutError` | The board did not confirm in time (`timeout`, 5 s by default), or a discovery page took too long. |
+| `asyncio.TimeoutError` | The board did not confirm in time (`timeout`, 5 s by default), or opening the socket or a discovery page took too long. |
 | `HandshakeTimeout` | No answer to the firmware probe within `handshake_timeout` (3 s). |
 | `IncompatibleFirmware` | Firmware other than 3.2.x, or an extension major other than 1. |
 | `IncompatiblePlugin` | The registered half's major differs from the plugin on the board. |
@@ -119,7 +122,8 @@ async for e in board.digital_changes(4):  # DigitalEvent(pin, value, timestamp)
 checksum failure and 2 for a timeout). Events are dispatched in arrival order on one task per board, never on the
 reader: a callback may be a coroutine (awaited before the next event), and one that raises is logged while the others
 still run. The queue holds 1000 events; when it is full the oldest is dropped and counted in `board.stats.dropped_events`.
-A stream ends when it is closed (`aclose()`) or the connection closes. A stream sees events from its creation on, so
+A stream ends when it is closed (`aclose()`) or the connection closes; one created after the connection closed ends at
+once. A stream sees events from its creation on, so
 create it before the chain that starts the reports.
 
 ## Stock mode
@@ -136,6 +140,28 @@ Against upstream Telemetrix4Esp32 3.2.x the client works within what that firmwa
   plugins. Pin numbers are checked against the stock client's lists (telemetrix-esp32 2.1.1) and a bad one is a
   `ValueError`.
 - PWM channels are numbered by the client (16 of them); the extended server allocates its own.
+- Sonar and DHT need `connect(..., stock_sensors=True)` and 1-wire needs an `init()` first; see the hazards below.
+
+### Stock firmware hazards
+
+Telemetrix4Esp32 3.2.0 trusts its client. Because the client never sends RESET (it reboots the board), everything
+below outlives the session: it persists until the board is power-cycled.
+
+- **1-wire before init.** The firmware holds `OneWire *ow = NULL` until `ONE_WIRE_INIT` and every 1-wire op but init
+  and CRC-8 calls through it unchecked: one before any init dereferences a null pointer and reboots the board. The
+  client raises `NotSupported`, before writing anything, for `reset`, `select`, `skip`, `write`, `read`,
+  `reset_search`, `search` and `search_all()` until an init has been sent in this session (an init earlier in the same
+  chain counts; one only built does not). `crc8()` needs no init.
+- **Init leak.** Each `ONE_WIRE_INIT` allocates a new `OneWire` and leaks the old one, so a second `init()` in a session
+  raises `ValueError`. A later session's init leaks one more; power-cycle the board now and then if you reconnect a
+  lot.
+- **Sensor counts persist.** `sonars[]` and `dhts[]` hold 6 entries each and the firmware writes them without a bound
+  check; the counts are never reset short of a reboot. Sonar and DHT therefore raise `NotSupported` unless you connect
+  with `stock_sensors=True`; then the client allows at most 6 of each per session (`ValueError` beyond, before
+  writing). The client cannot see what earlier sessions created, so **power-cycle the board between sessions that
+  create sensors**: otherwise a later session can overflow the array and crash it.
+- **Power-cycle to reset.** Pins, reports, the OneWire object and the sensor arrays of earlier sessions are cleared only
+  by a power cycle (or a reboot by other means); the extended server releases all of them when a client disconnects.
 
 ## Plugins
 

@@ -189,6 +189,12 @@ Everything in M1's Global Constraints still holds for stock mode. Stock-mode byt
   - Uses `LOOP [tag u8]` as the barrier.
   - Pin lists come from `telemetrix-esp32` 2.1.1's `valid_*_pins`, with the version recorded in the source.
   - Calls that need extended mode raise `NotSupported`.
+  - Stock firmware hazards (Telemetrix4Esp32 3.2.0; state persists across sessions until a power cycle, since the
+    client never sends RESET): a 1-wire op other than init and CRC-8 before an init null-derefs `OneWire *ow` and
+    reboots, so it raises `NotSupported` until an init was sent this session; each init leaks a `new OneWire`, so a
+    second init in a session raises `ValueError`; `sonars[]`/`dhts[]` (6 each) are written unbounded and their counts
+    persist, so sonar/DHT raise `NotSupported` unless `connect(..., stock_sensors=True)`, with at most 6 of each per
+    session (`ValueError` beyond, before writing), and the user power-cycles between sessions that create sensors.
 - **Barrier tags.** 16-bit in extended mode, 8-bit in stock mode. A tag whose wait timed out or was cancelled stays
   reserved until its reply arrives or the connection drops.
 
@@ -905,7 +911,9 @@ seq += 1
   - 1-wire: `onewire(bus)`, then `init(pin=None)`, `reset()` (yields bool), `select(rom)`, `skip()`,
     `write(byte, power=False)`, `read()` (yields int), `reset_search()`, `search()` (yields `bytes | None`),
     `crc8(data)` (yields int);
-  - sensors and reporting: `sonar(trig, echo)`, `dht(pin)`, `reporting(enabled)`, `analog_interval(ms)`, `reset()`;
+  - sensors and reporting: `sonar(trig, echo)`, `dht(pin)`, `reporting(enabled)`, `analog_interval(ms)`;
+  - board RESET: `reset()` on a chain without a target (`board.chain().reset()`); after `pin()` or `i2c()` it raises
+    `ValueError`;
   - `atomic(flag: bool = True)`.
   - On a bus other than 0, I2C and 1-wire ops are sent through ON_BUS.
 - Awaiting the chain sends it:
