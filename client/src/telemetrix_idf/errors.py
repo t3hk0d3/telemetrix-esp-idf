@@ -11,6 +11,7 @@ __all__ = [
     "IncompatibleFirmware",
     "IncompatiblePlugin",
     "NotSupported",
+    "ProtocolError",
     "TelemetrixError",
 ]
 
@@ -40,6 +41,10 @@ class ConnectionLost(TelemetrixError):
 
 class IncompatiblePlugin(TelemetrixError):
     """A plugin helper does not match the plugin the server runs in that slot."""
+
+
+class ProtocolError(TelemetrixError, ValueError):
+    """The server sent bytes that do not decode (short or inconsistent payload). Also a `ValueError`."""
 
 
 class ChainError(TelemetrixError):

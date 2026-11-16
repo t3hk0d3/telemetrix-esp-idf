@@ -7,6 +7,7 @@ from .errors import (
     IncompatibleFirmware,
     IncompatiblePlugin,
     NotSupported,
+    ProtocolError,
     TelemetrixError,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "IncompatibleFirmware",
     "IncompatiblePlugin",
     "NotSupported",
+    "ProtocolError",
     "TelemetrixError",
 ]

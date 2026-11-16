@@ -3,17 +3,22 @@
 Framing both ways is `[len][id][payload]`, `len` counting the id and the payload. 16-bit values are big-endian; the PWM
 frequency (f64) and the DHT floats (f32) are little-endian.
 
-Every builder returns a complete packet (length byte included) and raises `ValueError` on a bad argument: a bad
-argument is a programmer error, not a runtime condition, so no `TelemetrixError` subclass is involved. Decoders take the
-payload a `PacketParser` returned (no length byte, no id) and raise `ValueError` when it is malformed.
+Every builder returns a complete packet (length byte included) and raises plain `ValueError` on a bad argument: that
+is a programmer error, so no `TelemetrixError` subclass is involved. Integer arguments must be `int` (a bool or a float
+is refused; only the flag arguments accept a bool). Decoders take the payload a `PacketParser` returned (no length byte,
+no id) and raise `ProtocolError` when the server's bytes are malformed: that is a runtime condition, and
+`ProtocolError` derives from `TelemetrixError` (and from `ValueError`, for convenience). `PacketParser` raises nothing.
 """
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import NamedTuple
+
+from .errors import ProtocolError
 
 __all__ = [
     "CMD",
@@ -95,6 +100,7 @@ EXT_VERSION = (1, 0)
 STOCK_PAYLOAD_MAX = 30
 EXT_PAYLOAD_MAX = 254
 I2C_READ_MAX = 59
+ON_BUS_IDS = frozenset(range(9, 12)) | frozenset(range(27, 36))
 
 
 class CMD(IntEnum):
@@ -215,7 +221,7 @@ class Reason(IntEnum):
 
 def encode(cmd: int, payload: bytes = b"") -> bytes:
     """Frame one command: `[1 + len(payload)][cmd][payload]`. Stock ids carry at most 30 bytes, extended ids 254."""
-    if not 0 <= cmd <= CMD.PLUGIN:
+    if not _is_int(cmd) or not 0 <= cmd <= CMD.PLUGIN:
         raise ValueError(f"command id {cmd} outside 0..{int(CMD.PLUGIN)}")
     cap = EXT_PAYLOAD_MAX if cmd >= CMD.SYNC else STOCK_PAYLOAD_MAX
     if len(payload) > cap:
@@ -223,8 +229,12 @@ def encode(cmd: int, payload: bytes = b"") -> bytes:
     return bytes([1 + len(payload), cmd]) + bytes(payload)
 
 
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _u8(name: str, value: int, high: int = 255) -> int:
-    if not isinstance(value, int) or not 0 <= value <= high:
+    if not _is_int(value) or not 0 <= value <= high:
         raise ValueError(f"{name} {value!r} outside 0..{high}")
     return value
 
@@ -235,7 +245,7 @@ def _u16(name: str, value: int) -> bytes:
 
 
 def _flag(name: str, value: bool | int) -> int:
-    if value not in (0, 1):
+    if not (isinstance(value, bool) or _is_int(value)) or value not in (0, 1):
         raise ValueError(f"{name} {value!r} is not 0 or 1")
     return int(value)
 
@@ -273,10 +283,17 @@ def set_pin_mode_analog(pin: int, differential: int = 0, report: bool = True) ->
 
 def set_pin_mode_pwm(pin: int, channel: int, resolution: int, frequency: float) -> bytes:
     """PWM mode 8 `[pin, 8, channel, resolution, f64 LE frequency]`; resolution is 1..14 bits."""
-    if not 1 <= resolution <= 14:
+    if not _is_int(resolution) or not 1 <= resolution <= 14:
         raise ValueError(f"resolution {resolution!r} outside 1..14")
+    if (
+        isinstance(frequency, bool)
+        or not isinstance(frequency, (int, float))
+        or not math.isfinite(frequency)
+        or frequency <= 0
+    ):
+        raise ValueError(f"frequency {frequency!r} is not a finite positive number")
     head = bytes([_u8("pin", pin), 8, _u8("channel", channel), resolution])
-    return encode(CMD.SET_PIN_MODE, head + struct.pack("<d", frequency))
+    return encode(CMD.SET_PIN_MODE, head + struct.pack("<d", float(frequency)))
 
 
 def digital_write(pin: int, value: int) -> bytes:
@@ -410,9 +427,14 @@ def sync(tag: int, abort: bool) -> bytes:
 
 
 def on_bus(bus: int, inner: bytes) -> bytes:
-    """Wrap a framed stock command (a builder's output, length byte included) as `[bus, stock_id, payload...]`."""
+    """Wrap a framed stock command (a builder's output, length byte included) as `[bus, stock_id, payload...]`.
+
+    Only the ids the server allows on a bus are accepted: I2C 9-11 and 1-wire 27-35.
+    """
     if len(inner) < 2 or inner[0] != len(inner) - 1:
         raise ValueError("on_bus takes one framed stock command")
+    if inner[1] not in ON_BUS_IDS:
+        raise ValueError(f"command {inner[1]} cannot run on a bus (allowed: I2C 9-11, 1-wire 27-35)")
     return encode(CMD.ON_BUS, bytes([_u8("bus", bus)]) + inner[1:])
 
 
@@ -527,7 +549,7 @@ class BusReport:
 class CapabilitiesPage:
     page: int
     last_page: int
-    records: list[tuple[int, bytes]]
+    records: tuple[tuple[int, bytes], ...]
 
 
 @dataclass(frozen=True)
@@ -539,7 +561,7 @@ class PluginReport:
 
 def _need(name: str, payload: bytes, n: int) -> None:
     if len(payload) < n:
-        raise ValueError(f"{name} payload of {len(payload)} bytes, need {n}")
+        raise ProtocolError(f"{name} payload of {len(payload)} bytes, need {n}")
 
 
 def decode_digital(payload: bytes) -> PinValue:
@@ -558,7 +580,7 @@ def decode_firmware(payload: bytes) -> Firmware:
         return Firmware(payload[0], payload[1], payload[2], None)
     if len(payload) == 6 and payload[3] == MAGIC:
         return Firmware(payload[0], payload[1], payload[2], (payload[4], payload[5]))
-    raise ValueError(f"firmware payload {payload.hex()} is neither the stock nor the long form")
+    raise ProtocolError(f"firmware payload {payload.hex()} is neither the stock nor the long form")
 
 
 def decode_servo_unavailable(payload: bytes) -> int:
@@ -569,7 +591,7 @@ def decode_servo_unavailable(payload: bytes) -> int:
 def decode_i2c_read(payload: bytes) -> I2cRead:
     _need("I2C read", payload, 3)
     if payload[0] != len(payload) - 3:
-        raise ValueError(f"I2C read count {payload[0]} does not match {len(payload) - 3} data bytes")
+        raise ProtocolError(f"I2C read count {payload[0]} does not match {len(payload) - 3} data bytes")
     return I2cRead(payload[1], payload[2], bytes(payload[3:]))
 
 
@@ -591,7 +613,7 @@ def decode_dht(payload: bytes) -> DhtData | DhtError:
         return DhtData(payload[1], humidity, temperature)
     if payload[0] == 1 and len(payload) >= 3:
         return DhtError(payload[1], payload[2])
-    raise ValueError(f"DHT payload {payload.hex()} is neither data nor an error")
+    raise ProtocolError(f"DHT payload {payload.hex()} is neither data nor an error")
 
 
 def decode_one_wire(payload: bytes) -> OneWireReport:
@@ -613,7 +635,7 @@ def decode_error(payload: bytes) -> ErrorReport:
     if cmd == CMD.PLUGIN and len(payload) >= pos + 2:
         slot, sub = payload[pos], payload[pos + 1]
         pos += 2
-    if reason == Reason.PLUGIN and len(payload) >= pos + 1:
+    if cmd == CMD.PLUGIN and reason == Reason.PLUGIN and len(payload) >= pos + 1:
         code = payload[pos]
     return ErrorReport(seq, cmd, reason, slot, sub, code)
 
@@ -636,11 +658,11 @@ def decode_capabilities(payload: bytes) -> CapabilitiesPage:
     pos = 2
     while pos < len(payload):
         if pos + 2 > len(payload) or pos + 2 + payload[pos + 1] > len(payload):
-            raise ValueError("CAPABILITIES record is truncated")
+            raise ProtocolError("CAPABILITIES record is truncated")
         n = payload[pos + 1]
         records.append((payload[pos], bytes(payload[pos + 2 : pos + 2 + n])))
         pos += 2 + n
-    return CapabilitiesPage(payload[0], payload[1], records)
+    return CapabilitiesPage(payload[0], payload[1], tuple(records))
 
 
 def decode_plugin_report(payload: bytes) -> PluginReport:

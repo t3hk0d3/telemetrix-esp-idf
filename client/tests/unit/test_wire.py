@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from telemetrix_idf import wire
+from telemetrix_idf import ProtocolError, TelemetrixError, wire
 from telemetrix_idf.wire import CMD, RPT, Reason
 
 # --- constants ---------------------------------------------------------------------------------------------------
@@ -27,57 +27,57 @@ def test_reasons_match_the_server_codes():
 # --- encoders ----------------------------------------------------------------------------------------------------
 
 EXACT = [
-    ("loop", wire.loop(7), [2, 0, 7]),
-    ("input", wire.set_pin_mode_input(4), [4, 1, 4, 0, 1]),
-    ("input without reports", wire.set_pin_mode_input(4, report=False), [4, 1, 4, 0, 0]),
-    ("pull-up", wire.set_pin_mode_input_pullup(4), [4, 1, 4, 2, 1]),
-    ("pull-down", wire.set_pin_mode_input_pulldown(4, report=False), [4, 1, 4, 9, 0]),
-    ("output", wire.set_pin_mode_output(17), [3, 1, 17, 1]),
-    ("analog", wire.set_pin_mode_analog(3, differential=0x0102), [6, 1, 3, 3, 1, 2, 1]),
-    ("digital write", wire.digital_write(17, 1), [3, 2, 17, 1]),
-    ("analog write", wire.analog_write(17, 0x0123), [4, 3, 17, 1, 0x23]),
-    ("modify reporting", wire.modify_reporting(3, 9), [3, 4, 3, 9]),
-    ("firmware stock probe", wire.get_firmware_version(), [1, 5]),
-    ("firmware handshake", wire.get_firmware_version((1, 0)), [4, 5, 0xA7, 1, 0]),
-    ("servo attach", wire.servo_attach(5, 544, 2400), [6, 6, 5, 2, 0x20, 9, 0x60]),
-    ("servo write", wire.servo_write(5, 90), [3, 7, 5, 90]),
-    ("servo detach", wire.servo_detach(5), [2, 8, 5]),
-    ("i2c begin default", wire.i2c_begin(), [1, 9]),
-    ("i2c begin pins", wire.i2c_begin(21, 22), [3, 9, 21, 22]),
-    ("i2c begin no pins", wire.i2c_begin(0, 0), [3, 9, 0, 0]),
-    ("i2c read", wire.i2c_read(0x44, 0x10, 6, True), [5, 10, 0x44, 0x10, 6, 1]),
-    ("i2c read no stop", wire.i2c_read(0x44, 0, 59, False), [5, 10, 0x44, 0, 59, 0]),
-    ("i2c write", wire.i2c_write(0x44, b"\x01\x02"), [5, 11, 2, 0x44, 1, 2]),
-    ("sonar new", wire.sonar_new(12, 13), [3, 12, 12, 13]),
-    ("dht new", wire.dht_new(15), [2, 13, 15]),
-    ("stop all reports", wire.stop_all_reports(), [1, 14]),
-    ("analog interval", wire.set_analog_scanning_interval(20), [2, 15, 20]),
-    ("enable all reports", wire.enable_all_reports(), [1, 16]),
-    ("analog out attach", wire.analog_out_attach(2, 1), [3, 17, 2, 1]),
-    ("analog out detach", wire.analog_out_detach(2), [2, 18, 2]),
-    ("reset", wire.reset(), [1, 20]),
-    ("one-wire init", wire.one_wire_init(4), [2, 27, 4]),
-    ("one-wire reset", wire.one_wire_reset(), [1, 28]),
-    ("one-wire select", wire.one_wire_select(bytes(range(1, 9))), [9, 29, 1, 2, 3, 4, 5, 6, 7, 8]),
-    ("one-wire skip", wire.one_wire_skip(), [1, 30]),
-    ("one-wire write", wire.one_wire_write(0x44, power=True), [3, 31, 0x44, 1]),
-    ("one-wire write unpowered", wire.one_wire_write(0x44), [3, 31, 0x44, 0]),
-    ("one-wire read", wire.one_wire_read(), [1, 32]),
-    ("one-wire reset search", wire.one_wire_reset_search(), [1, 33]),
-    ("one-wire search", wire.one_wire_search(), [1, 34]),
-    ("one-wire crc8 sends exactly n bytes", wire.one_wire_crc8(b"\xaa\xbb\xcc"), [5, 35, 3, 0xAA, 0xBB, 0xCC]),
-    ("sync", wire.sync(0x0102, abort=True), [4, 57, 1, 2, 1]),
-    ("sync no abort", wire.sync(0xFFFF, abort=False), [4, 57, 0xFF, 0xFF, 0]),
-    ("get capabilities", wire.get_capabilities(2), [2, 59, 2]),
-    ("plugin", wire.plugin(1, 3, b"\x09\x08"), [5, 60, 1, 3, 9, 8]),
-    ("plugin without args", wire.plugin(0, 0), [3, 60, 0, 0]),
-    ("on bus", wire.on_bus(1, wire.i2c_read(0x44, 0, 2, True)), [7, 58, 1, 10, 0x44, 0, 2, 1]),
+    ("loop", lambda: wire.loop(7), [2, 0, 7]),
+    ("input", lambda: wire.set_pin_mode_input(4), [4, 1, 4, 0, 1]),
+    ("input without reports", lambda: wire.set_pin_mode_input(4, report=False), [4, 1, 4, 0, 0]),
+    ("pull-up", lambda: wire.set_pin_mode_input_pullup(4), [4, 1, 4, 2, 1]),
+    ("pull-down", lambda: wire.set_pin_mode_input_pulldown(4, report=False), [4, 1, 4, 9, 0]),
+    ("output", lambda: wire.set_pin_mode_output(17), [3, 1, 17, 1]),
+    ("analog", lambda: wire.set_pin_mode_analog(3, differential=0x0102), [6, 1, 3, 3, 1, 2, 1]),
+    ("digital write", lambda: wire.digital_write(17, 1), [3, 2, 17, 1]),
+    ("analog write", lambda: wire.analog_write(17, 0x0123), [4, 3, 17, 1, 0x23]),
+    ("modify reporting", lambda: wire.modify_reporting(3, 9), [3, 4, 3, 9]),
+    ("firmware stock probe", lambda: wire.get_firmware_version(), [1, 5]),
+    ("firmware handshake", lambda: wire.get_firmware_version((1, 0)), [4, 5, 0xA7, 1, 0]),
+    ("servo attach", lambda: wire.servo_attach(5, 544, 2400), [6, 6, 5, 2, 0x20, 9, 0x60]),
+    ("servo write", lambda: wire.servo_write(5, 90), [3, 7, 5, 90]),
+    ("servo detach", lambda: wire.servo_detach(5), [2, 8, 5]),
+    ("i2c begin default", lambda: wire.i2c_begin(), [1, 9]),
+    ("i2c begin pins", lambda: wire.i2c_begin(21, 22), [3, 9, 21, 22]),
+    ("i2c begin no pins", lambda: wire.i2c_begin(0, 0), [3, 9, 0, 0]),
+    ("i2c read", lambda: wire.i2c_read(0x44, 0x10, 6, True), [5, 10, 0x44, 0x10, 6, 1]),
+    ("i2c read no stop", lambda: wire.i2c_read(0x44, 0, 59, False), [5, 10, 0x44, 0, 59, 0]),
+    ("i2c write", lambda: wire.i2c_write(0x44, b"\x01\x02"), [5, 11, 2, 0x44, 1, 2]),
+    ("sonar new", lambda: wire.sonar_new(12, 13), [3, 12, 12, 13]),
+    ("dht new", lambda: wire.dht_new(15), [2, 13, 15]),
+    ("stop all reports", lambda: wire.stop_all_reports(), [1, 14]),
+    ("analog interval", lambda: wire.set_analog_scanning_interval(20), [2, 15, 20]),
+    ("enable all reports", lambda: wire.enable_all_reports(), [1, 16]),
+    ("analog out attach", lambda: wire.analog_out_attach(2, 1), [3, 17, 2, 1]),
+    ("analog out detach", lambda: wire.analog_out_detach(2), [2, 18, 2]),
+    ("reset", lambda: wire.reset(), [1, 20]),
+    ("one-wire init", lambda: wire.one_wire_init(4), [2, 27, 4]),
+    ("one-wire reset", lambda: wire.one_wire_reset(), [1, 28]),
+    ("one-wire select", lambda: wire.one_wire_select(bytes(range(1, 9))), [9, 29, 1, 2, 3, 4, 5, 6, 7, 8]),
+    ("one-wire skip", lambda: wire.one_wire_skip(), [1, 30]),
+    ("one-wire write", lambda: wire.one_wire_write(0x44, power=True), [3, 31, 0x44, 1]),
+    ("one-wire write unpowered", lambda: wire.one_wire_write(0x44), [3, 31, 0x44, 0]),
+    ("one-wire read", lambda: wire.one_wire_read(), [1, 32]),
+    ("one-wire reset search", lambda: wire.one_wire_reset_search(), [1, 33]),
+    ("one-wire search", lambda: wire.one_wire_search(), [1, 34]),
+    ("one-wire crc8 sends exactly n bytes", lambda: wire.one_wire_crc8(b"\xaa\xbb\xcc"), [5, 35, 3, 0xAA, 0xBB, 0xCC]),
+    ("sync", lambda: wire.sync(0x0102, abort=True), [4, 57, 1, 2, 1]),
+    ("sync no abort", lambda: wire.sync(0xFFFF, abort=False), [4, 57, 0xFF, 0xFF, 0]),
+    ("get capabilities", lambda: wire.get_capabilities(2), [2, 59, 2]),
+    ("plugin", lambda: wire.plugin(1, 3, b"\x09\x08"), [5, 60, 1, 3, 9, 8]),
+    ("plugin without args", lambda: wire.plugin(0, 0), [3, 60, 0, 0]),
+    ("on bus", lambda: wire.on_bus(1, wire.i2c_read(0x44, 0, 2, True)), [7, 58, 1, 10, 0x44, 0, 2, 1]),
 ]
 
 
 @pytest.mark.parametrize(("name", "got", "want"), EXACT, ids=[e[0] for e in EXACT])
 def test_encoder_produces_the_exact_bytes(name, got, want):
-    assert got == bytes(want)
+    assert got() == bytes(want)
 
 
 def test_pwm_mode_carries_the_little_endian_f64_frequency():
@@ -114,35 +114,52 @@ def test_encode_rejects_an_id_outside_0_to_60(cmd):
         wire.encode(cmd, b"")
 
 
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda: wire.set_pin_mode_output(256),
-        lambda: wire.set_pin_mode_output(-1),
-        lambda: wire.digital_write(1, 2),
-        lambda: wire.analog_write(1, 65536),
-        lambda: wire.modify_reporting(5, 1),
-        lambda: wire.servo_write(1, 181),
-        lambda: wire.i2c_read(128, 0, 1, True),
-        lambda: wire.i2c_read(0x44, 0, 60, True),
-        lambda: wire.i2c_begin(21),
-        lambda: wire.i2c_write(0x44, bytes(29)),
-        lambda: wire.one_wire_select(b"\x01\x02"),
-        lambda: wire.one_wire_crc8(bytes(30)),
-        lambda: wire.set_analog_scanning_interval(256),
-        lambda: wire.sync(65536, abort=True),
-        lambda: wire.get_capabilities(256),
-        lambda: wire.plugin(256, 0),
-        lambda: wire.plugin(0, 0, bytes(253)),
-        lambda: wire.on_bus(256, wire.i2c_read(0x44, 0, 1, True)),
-        lambda: wire.on_bus(1, b"\x05\x0a"),
-        lambda: wire.set_pin_mode_pwm(1, 0, 15, 100.0),
-        lambda: wire.get_firmware_version((256, 0)),
-    ],
-)
+BAD_ARGUMENTS = {
+    "pin above 255": lambda: wire.set_pin_mode_output(256),
+    "negative pin": lambda: wire.set_pin_mode_output(-1),
+    "float pin": lambda: wire.set_pin_mode_output(1.0),
+    "bool pin": lambda: wire.set_pin_mode_output(True),
+    "digital value 2": lambda: wire.digital_write(1, 2),
+    "float digital value": lambda: wire.digital_write(1, 1.0),
+    "analog value above 65535": lambda: wire.analog_write(1, 65536),
+    "reporting mode 5": lambda: wire.modify_reporting(5, 1),
+    "servo angle 181": lambda: wire.servo_write(1, 181),
+    "i2c address 128": lambda: wire.i2c_read(128, 0, 1, True),
+    "i2c count 60": lambda: wire.i2c_read(0x44, 0, 60, True),
+    "i2c begin one pin": lambda: wire.i2c_begin(21),
+    "i2c write of 29 bytes": lambda: wire.i2c_write(0x44, bytes(29)),
+    "one-wire rom of 2 bytes": lambda: wire.one_wire_select(b"\x01\x02"),
+    "one-wire crc8 of 30 bytes": lambda: wire.one_wire_crc8(bytes(30)),
+    "analog interval 256": lambda: wire.set_analog_scanning_interval(256),
+    "sync tag 65536": lambda: wire.sync(65536, abort=True),
+    "capabilities page 256": lambda: wire.get_capabilities(256),
+    "plugin slot 256": lambda: wire.plugin(256, 0),
+    "plugin args of 253 bytes": lambda: wire.plugin(0, 0, bytes(253)),
+    "on_bus bus 256": lambda: wire.on_bus(256, wire.i2c_read(0x44, 0, 1, True)),
+    "on_bus unframed inner": lambda: wire.on_bus(1, b"\x05\x0a"),
+    "on_bus digital write inner": lambda: wire.on_bus(1, wire.digital_write(1, 1)),
+    "on_bus extended inner": lambda: wire.on_bus(1, wire.sync(1, True)),
+    "pwm resolution 15": lambda: wire.set_pin_mode_pwm(1, 0, 15, 100.0),
+    "pwm resolution float": lambda: wire.set_pin_mode_pwm(1, 0, 10.0, 100.0),
+    "pwm channel 256": lambda: wire.set_pin_mode_pwm(1, 256, 10, 100.0),
+    "pwm frequency nan": lambda: wire.set_pin_mode_pwm(1, 0, 10, float("nan")),
+    "pwm frequency inf": lambda: wire.set_pin_mode_pwm(1, 0, 10, float("inf")),
+    "pwm frequency zero": lambda: wire.set_pin_mode_pwm(1, 0, 10, 0.0),
+    "pwm frequency string": lambda: wire.set_pin_mode_pwm(1, 0, 10, "100"),
+    "handshake major 256": lambda: wire.get_firmware_version((256, 0)),
+    "encode id as float": lambda: wire.encode(5.0, b""),
+    "encode id as bool": lambda: wire.encode(True, b""),
+}
+
+
+@pytest.mark.parametrize("call", BAD_ARGUMENTS.values(), ids=BAD_ARGUMENTS.keys())
 def test_builder_rejects_a_bad_argument_with_value_error(call):
     with pytest.raises(ValueError):
         call()
+
+
+def test_on_bus_accepts_the_one_wire_ids():
+    assert wire.on_bus(0, wire.one_wire_reset()) == bytes([3, 58, 0, 28])
 
 
 # --- PacketParser ------------------------------------------------------------------------------------------------
@@ -204,12 +221,12 @@ def test_decode_firmware_long_form_returns_the_extension_version():
 
 
 def test_decode_firmware_long_form_with_a_wrong_magic_is_rejected():
-    with pytest.raises(ValueError, match="firmware"):
+    with pytest.raises(ProtocolError, match="firmware"):
         wire.decode_firmware(bytes([3, 2, 100, 0xA8, 1, 0]))
 
 
 def test_decode_firmware_of_a_wrong_length_is_rejected():
-    with pytest.raises(ValueError, match="firmware"):
+    with pytest.raises(ProtocolError, match="firmware"):
         wire.decode_firmware(bytes([3, 2]))
 
 
@@ -224,7 +241,7 @@ def test_decode_i2c_read_returns_address_register_and_data():
 
 
 def test_decode_i2c_read_with_a_count_mismatch_is_rejected():
-    with pytest.raises(ValueError, match="I2C"):
+    with pytest.raises(ProtocolError, match="I2C"):
         wire.decode_i2c_read(bytes([3, 0x44, 0x10, 0xAA]))
 
 
@@ -246,7 +263,7 @@ def test_decode_dht_error_returns_pin_and_code():
 
 
 def test_decode_dht_of_an_unknown_kind_is_rejected():
-    with pytest.raises(ValueError, match="DHT"):
+    with pytest.raises(ProtocolError, match="DHT"):
         wire.decode_dht(bytes([2, 15, 2]))
 
 
@@ -276,6 +293,11 @@ def test_decode_error_with_the_plugin_reason_returns_the_code():
     assert (got.reason, got.slot, got.sub, got.code) == (Reason.PLUGIN, 1, 3, 42)
 
 
+def test_decode_error_with_the_plugin_reason_on_another_command_has_no_code():
+    got = wire.decode_error(bytes([0, 9, 2, 10, 0x2A]))
+    assert (got.cmd, got.reason, got.code) == (2, Reason.PLUGIN, None)
+
+
 def test_decode_error_for_a_missing_slot_has_no_slot_and_sub():
     got = wire.decode_error(bytes([0, 9, 60, 12]))
     assert (got.reason, got.slot, got.sub, got.code) == (Reason.NO_SUCH_SLOT, None, None, None)
@@ -286,7 +308,7 @@ def test_decode_error_with_an_unknown_reason_keeps_the_number():
 
 
 def test_decode_error_that_is_too_short_is_rejected():
-    with pytest.raises(ValueError, match="ERROR"):
+    with pytest.raises(ProtocolError, match="ERROR"):
         wire.decode_error(bytes([0, 1, 2]))
 
 
@@ -295,7 +317,7 @@ def test_decode_sync_reply_returns_tag_and_seq():
 
 
 def test_decode_sync_reply_that_is_too_short_is_rejected():
-    with pytest.raises(ValueError, match="SYNC_REPLY"):
+    with pytest.raises(ProtocolError, match="SYNC_REPLY"):
         wire.decode_sync_reply(b"\x01\x02\x03")
 
 
@@ -310,7 +332,7 @@ def test_decode_bus_report_payload_feeds_the_stock_decoder():
 
 
 def test_decode_bus_report_that_is_too_short_is_rejected():
-    with pytest.raises(ValueError, match="BUS_REPORT"):
+    with pytest.raises(ProtocolError, match="BUS_REPORT"):
         wire.decode_bus_report(b"\x01")
 
 
@@ -318,17 +340,50 @@ def test_decode_capabilities_returns_page_numbers_and_raw_records():
     payload = bytes([0, 2]) + bytes([1, 3, 9, 8, 7]) + bytes([4, 0]) + bytes([2, 1, 5])
     got = wire.decode_capabilities(payload)
     assert (got.page, got.last_page) == (0, 2)
-    assert got.records == [(1, b"\x09\x08\x07"), (4, b""), (2, b"\x05")]
+    assert got.records == ((1, b"\x09\x08\x07"), (4, b""), (2, b"\x05"))
 
 
 def test_decode_capabilities_of_an_empty_page_has_no_records():
-    assert wire.decode_capabilities(bytes([1, 1])).records == []
+    assert wire.decode_capabilities(bytes([1, 1])).records == ()
 
 
 def test_decode_capabilities_with_a_truncated_record_is_rejected():
-    with pytest.raises(ValueError, match="CAPABILITIES"):
+    with pytest.raises(ProtocolError, match="CAPABILITIES"):
         wire.decode_capabilities(bytes([0, 0, 1, 5, 1, 2]))
 
 
 def test_decode_plugin_report_returns_slot_sub_and_data():
     assert wire.decode_plugin_report(bytes([2, 7, 1, 2, 3])) == wire.PluginReport(slot=2, sub=7, data=b"\x01\x02\x03")
+
+
+# --- malformed server payloads -----------------------------------------------------------------------------------
+
+SHORT = {
+    "digital": (wire.decode_digital, b"\x01"),
+    "analog": (wire.decode_analog, b"\x01\x02"),
+    "firmware": (wire.decode_firmware, b"\x03\x02"),
+    "servo unavailable": (wire.decode_servo_unavailable, b""),
+    "i2c read": (wire.decode_i2c_read, b"\x00\x44"),
+    "i2c short": (wire.decode_i2c_short, b"\x01"),
+    "sonar": (wire.decode_sonar, b"\x0c\x01"),
+    "dht empty": (wire.decode_dht, b""),
+    "dht data truncated": (wire.decode_dht, bytes([0, 15]) + bytes(7)),
+    "dht error truncated": (wire.decode_dht, bytes([1, 15])),
+    "one-wire": (wire.decode_one_wire, b""),
+    "error": (wire.decode_error, b"\x00\x01\x02"),
+    "sync reply": (wire.decode_sync_reply, b"\x01\x02\x03"),
+    "bus report": (wire.decode_bus_report, b"\x01"),
+    "capabilities": (wire.decode_capabilities, b"\x00"),
+    "capabilities truncated record": (wire.decode_capabilities, bytes([0, 0, 1, 5, 1])),
+    "plugin report": (wire.decode_plugin_report, b"\x02"),
+}
+
+
+@pytest.mark.parametrize(("decode", "payload"), SHORT.values(), ids=SHORT.keys())
+def test_decoder_raises_protocol_error_on_a_malformed_payload(decode, payload):
+    with pytest.raises(ProtocolError):
+        decode(payload)
+
+
+def test_protocol_error_is_a_telemetrix_error_and_a_value_error():
+    assert issubclass(ProtocolError, TelemetrixError) and issubclass(ProtocolError, ValueError)
