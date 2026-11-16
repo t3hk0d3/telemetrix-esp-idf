@@ -9,15 +9,18 @@
 #define PIN(n, caps_, unit, channel) \
     {.gpio = (n), .caps = (caps_), .safe = TELEMETRIX_SAFE_FLOAT, .adc_unit = (unit), .adc_channel = (channel)}
 
-/* ESP32-P4 ADC1: GPIO16-23 are channels 0-7. */
+/* ESP32-P4 ADC1: GPIO16-23 are channels 0-7. GPIO7 and 8 serve as the fixed I2C pair. */
 static const telemetrix_pin_t pins[] = {
     PIN(2, BIDIR, -1, -1),
     PIN(3, BIDIR, -1, -1),
+    PIN(7, BIDIR, -1, -1),
+    PIN(8, BIDIR, -1, -1),
     PIN(20, BIDIR | TELEMETRIX_CAP_ADC, 0, 4),
     PIN(21, BIDIR | TELEMETRIX_CAP_ADC, 0, 5),
 };
 static const telemetrix_adc_grant_t adc[] = {{.unit = 0, .handle = NULL}};
-static const telemetrix_i2c_bus_t i2c[] = {{.bus = 0, .port = 0, .sda = -1, .scl = -1, .speed_hz = 100000}};
+/* Fixed pins: the stock client's I2C_BEGIN names none. */
+static const telemetrix_i2c_bus_t i2c[] = {{.bus = 0, .port = 0, .sda = 7, .scl = 8, .speed_hz = 100000}};
 static const telemetrix_onewire_bus_t onewire[] = {{.bus = 0, .gpio = -1}};
 
 static const telemetrix_profile_t profile = {

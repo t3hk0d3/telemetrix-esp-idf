@@ -72,7 +72,9 @@ RESET and `telemetrix_stop`. The component never calls `gpio_reset_pin` (it enab
 
 Stock commands always use bus 0 (I2C bus 0 and 1-wire bus 0). `I2C_BEGIN` pins are used only when bus 0's grant says
 "client chooses pins" (and must be profile pins with the I2C capability), otherwise they are ignored; `[0,0]` with
-"client chooses" is refused.
+"client chooses" is refused. The stock client's `set_pin_mode_i2c()` always sends a bare `I2C_BEGIN`, so a profile
+meant for it gives bus 0 fixed pins; the examples do (Olimex ESP32-POE: SDA GPIO13, SCL GPIO16 on UEXT; S3 DevKitC: 13,
+14; C6 DevKitC: 23, 22).
 
 **Settings** (`telemetrix_config_default` fills every field; `telemetrix_config_t`):
 

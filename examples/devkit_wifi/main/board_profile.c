@@ -40,6 +40,9 @@ static const telemetrix_pin_t pins[] = {
     PIN(23, BIDIR, -1, -1),
 };
 #define LEDC_CHANNELS 0x3f /* 6 channels */
+/* I2C bus 0: SDA GPIO23, SCL GPIO22 (plain GPIO, both in the stock client's pin lists). */
+#define I2C_SDA 23
+#define I2C_SCL 22
 
 #else
 
@@ -56,11 +59,16 @@ static const telemetrix_pin_t pins[] = {
     PIN(21, BIDIR, -1, -1),
 };
 #define LEDC_CHANNELS 0xff /* 8 channels */
+/* I2C bus 0: SDA GPIO13, SCL GPIO14 (digital-only ADC2 pins, both in the stock client's pin lists; the Arduino default
+ * pair 8/9 is not in them). */
+#define I2C_SDA 13
+#define I2C_SCL 14
 
 #endif
 
 static const telemetrix_adc_grant_t adc[] = {{.unit = 0, .handle = NULL}};
-static const telemetrix_i2c_bus_t i2c[] = {{.bus = 0, .port = 0, .sda = -1, .scl = -1, .speed_hz = 100000}};
+/* Fixed pins: the stock client's I2C_BEGIN names none. They stay usable as plain GPIO until a client sends I2C_BEGIN. */
+static const telemetrix_i2c_bus_t i2c[] = {{.bus = 0, .port = 0, .sda = I2C_SDA, .scl = I2C_SCL, .speed_hz = 100000}};
 static const telemetrix_onewire_bus_t onewire[] = {{.bus = 0, .gpio = -1}};
 
 const telemetrix_profile_t board_profile = {

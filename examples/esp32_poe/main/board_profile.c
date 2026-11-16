@@ -4,7 +4,9 @@
  * Olimex ESP32-POE-ISO (also covers ESP32-POE, same LAN8720 wiring), read from the schematic
  * https://github.com/OLIMEX/ESP32-POE-ISO/blob/master/HARDWARE/ESP32-PoE-ISO-Rev.O/ESP32-PoE-ISO_Rev_O.kicad_sch
  * (hardware revision O, the newest in that repository). Header nets: EXT1 GPIO0-5 (1, 3 are the USB-UART console),
- * EXT2 GPIO13 14 15 16 32 33 34 35 36 39; UEXT repeats GPIO2 5 13 36.
+ * EXT2 GPIO13 14 15 16 32 33 34 35 36 39. UEXT1 (from the board file ESP32-PoE-ISO_Rev_O.kicad_pcb of the same
+ * revision): pin 3 GPIO4/U1TXD, 4 the U1RXD line through D4, 5 net "GPIO16/I2C-SCL", 6 net "GPIO13/I2C-SDA", 7 GPIO15,
+ * 8 GPIO2, 9 GPIO14, 10 GPIO5.
  *
  * Left out of the profile:
  *   GPIO 17, 18, 19, 21, 22, 23, 25, 26, 27  LAN8720 RMII, clock, MDC and MDIO
@@ -44,8 +46,9 @@ static const telemetrix_pin_t pins[] = {
 };
 
 static const telemetrix_adc_grant_t adc[] = {{.unit = 0, .handle = NULL}};
-/* The client chooses the pins; GPIO13 and GPIO16 carry the board's I2C labels. */
-static const telemetrix_i2c_bus_t i2c[] = {{.bus = 0, .port = 0, .sda = -1, .scl = -1, .speed_hz = 100000}};
+/* Fixed pins: the stock client's I2C_BEGIN names none. SDA GPIO13 and SCL GPIO16 are the board's I2C nets on UEXT1
+ * (pins 6 and 5, see above); they stay usable as plain GPIO while no client has sent I2C_BEGIN. */
+static const telemetrix_i2c_bus_t i2c[] = {{.bus = 0, .port = 0, .sda = 13, .scl = 16, .speed_hz = 100000}};
 static const telemetrix_onewire_bus_t onewire[] = {{.bus = 0, .gpio = -1}};
 
 const telemetrix_profile_t board_profile = {
