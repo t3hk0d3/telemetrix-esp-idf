@@ -8,6 +8,11 @@ from conftest import IO_TIMEOUT, Raw
 LOOP_PACKET = bytes([2, 0, 0x42])
 
 
+def dropped_for_not_reading(status):
+    """Clients dropped by the stall timer or by a reply that found no room in the send queue."""
+    return status["stalled_clients"] + status["overflowed_clients"]
+
+
 def expect_reset(conn, send=b""):
     """The server answers with RST and not with a byte; the send may already meet the reset."""
     with pytest.raises(ConnectionResetError):
@@ -50,7 +55,7 @@ def test_allowed_peer_is_served(make_server):
     conn.close()
 
 
-def test_stalled_reader_dropped_after_stall_ms(make_server):
+def test_non_reading_client_dropped_and_counted(make_server):
     srv = make_server("--stall-ms", 500)
     # A tiny receive buffer keeps the server's send buffer small too: the replies pile up in the server.
     conn = Raw(srv.port, rcvbuf=1024)
@@ -69,7 +74,8 @@ def test_stalled_reader_dropped_after_stall_ms(make_server):
             time.sleep(0.01)
     # never read: the server must give up on this client by itself
     deadline = time.monotonic() + IO_TIMEOUT
-    while srv.status()["stalled_clients"] == 0:
+    # replies pile up: the send queue overflows (overflowed_clients) or, if it never does, the stall timer fires
+    while dropped_for_not_reading(srv.status()) == 0:
         assert time.monotonic() < deadline, "the stalled client was not dropped"
         time.sleep(0.05)
     assert srv.status()["client"] == "-"

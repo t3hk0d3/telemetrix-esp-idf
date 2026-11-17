@@ -54,7 +54,8 @@ def test_stall_drops_the_client_and_counts_it(make_server):
     srv = make_server("--stall-ms", STALL_MS)
     result = hostile(srv, "stall")
     assert result.returncode == 0, result.stderr
-    assert srv.status()["stalled_clients"] >= 1
+    st = srv.status()
+    assert st["stalled_clients"] + st["overflowed_clients"] >= 1
 
 
 def test_unreachable_server_exits_non_zero():

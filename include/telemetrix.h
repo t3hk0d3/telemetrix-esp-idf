@@ -190,7 +190,8 @@ typedef struct {
     bool running, listening;
     char client[TELEMETRIX_PEER_MAX];
     uint32_t refused_connections, dropped_packets, ignored_commands, refused_commands, coalesced_reports,
-             stalled_clients;
+             stalled_clients;           /**< dropped: no send progress for send_stall_ms */
+    uint32_t overflowed_clients;  /**< dropped: a reply did not fit the send queue (send_queue_bytes) */
     size_t n_pins;
     telemetrix_pin_use_t pins[64];
     bool extended;                /**< the client is in extended mode */

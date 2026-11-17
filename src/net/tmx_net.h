@@ -58,7 +58,7 @@ typedef struct tmx_conn {
     uint32_t dropped;                           /**< unkeyed non-reply reports lost for lack of room, since init */
 } tmx_conn_t;
 
-typedef enum { TMX_CONN_IDLE, TMX_CONN_PENDING, TMX_CONN_STALLED, TMX_CONN_ERROR } tmx_conn_state_t;
+typedef enum { TMX_CONN_IDLE, TMX_CONN_PENDING, TMX_CONN_STALLED, TMX_CONN_OVERFLOW, TMX_CONN_ERROR } tmx_conn_state_t;
 
 /** Allocate the queue buffer (internal RAM when available). bytes must be at least TMX_REPORT_MAX (64): ESP_ERR_INVALID_ARG
  *  otherwise, ESP_ERR_NO_MEM when the allocation fails. */
@@ -67,13 +67,13 @@ void tmx_conn_deinit(tmx_conn_t *c);
 /** Replace the function flush sends with (default send()); for tests that script partial and zero-byte sends. */
 void tmx_conn_set_sender(tmx_conn_t *c, tmx_send_fn send_fn);
 /** Queue one report. reply true: never dropped, keys ignored, may use the reply reserve (a quarter of the queue); a reply
- *  that fits nowhere marks the connection broken and flush reports it as STALLED. Other reports need room outside the
+ *  that fits nowhere marks the connection broken and flush reports it as OVERFLOW. Other reports need room outside the
  *  reserve; a keyed one replaces an unsent entry of the same key, and when there is no room waits in a pending table
  *  (latest value per key) that flush moves into the queue as room frees: keyed reports are coalesced, never lost; an
  *  unkeyed one with no room is counted in dropped. key_kind TMX_COALESCE_NONE (-1) = no key. */
 void tmx_conn_queue(tmx_conn_t *c, const uint8_t *r, size_t n, bool reply, int8_t key_kind, uint16_t key);
 /** Send what the socket takes without blocking. IDLE: queue empty. PENDING: bytes left. STALLED: bytes left and no
- *  progress for stall_ms (0 = never), or broken. ERROR: the socket failed. */
+ *  progress for stall_ms (0 = never). OVERFLOW: broken (a reply did not fit). ERROR: the socket failed. */
 tmx_conn_state_t tmx_conn_flush(tmx_conn_t *c, int fd, uint32_t now_ms, uint16_t stall_ms);
 /** Empty the queue and clear the broken and stall state; the buffer and the counters stay. */
 void tmx_conn_reset(tmx_conn_t *c);

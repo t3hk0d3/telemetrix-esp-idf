@@ -85,10 +85,11 @@ static void print_status(void)
     telemetrix_status_t st;
     if (telemetrix_get_status(&st) == ESP_OK) {
         printf("status client=%s refused_connections=%u dropped_packets=%u ignored_commands=%u refused_commands=%u "
-               "coalesced_reports=%u stalled_clients=%u ledc_attach=%u ledc_duty=%u extended=%d protocol_violations=%u "
+               "coalesced_reports=%u stalled_clients=%u overflowed_clients=%u ledc_attach=%u ledc_duty=%u extended=%d protocol_violations=%u "
                "error_reports=%u\n", st.client[0] ? st.client : "-",
                (unsigned)st.refused_connections, (unsigned)st.dropped_packets, (unsigned)st.ignored_commands,
                (unsigned)st.refused_commands, (unsigned)st.coalesced_reports, (unsigned)st.stalled_clients,
+               (unsigned)st.overflowed_clients,
                (unsigned)tmx_fake_count("ledc_attach"),
                (unsigned)tmx_fake_count("ledc_duty"), st.extended ? 1 : 0, (unsigned)st.protocol_violations,
                (unsigned)st.error_reports);
