@@ -316,6 +316,11 @@ static void packet_cb(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
             s->hooks.reset(s->hooks.ctx);
         }
     }
+    /* send what this packet produced before the next one runs: a keyed report is only replaced while the socket is
+     * backed up, so a pulse written by two packets of one chunk keeps both edges; the loop acts on the state */
+    if (tmx_conn_pending(&s->conn) > 0) {
+        (void)tmx_conn_flush(&s->conn, s->client, s->now, s->cfg.send_stall_ms);
+    }
 }
 
 /** Release the client: socket closed, claims freed and pins in their safe states, queue and completions dropped. Then

@@ -137,3 +137,15 @@ def test_disconnect_returns_pins_to_safe_state(server, raw):
         if report[0] == 2:
             seen[report[1]] = report[2]
     assert seen == {4: 0, 12: 1}
+
+
+def test_pulse_written_in_one_send_reports_both_edges(server, raw):
+    # gpio 5 is wired to gpio 4: a 1 then a 0 written by two packets of one send, with the socket not backed up
+    conn = raw()
+    conn.send(1, 5, 1)  # gpio 5 output (low)
+    conn.send(1, 4, 0, 1)  # gpio 4 input, report
+    assert conn.recv_report() == [2, 4, 0]  # the first sample
+    conn.sock.sendall(bytes([3, 2, 5, 1, 3, 2, 5, 0]))
+    assert conn.recv_report() == [2, 4, 1]
+    assert conn.recv_report() == [2, 4, 0]
+    conn.close()

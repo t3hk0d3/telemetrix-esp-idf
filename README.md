@@ -171,8 +171,8 @@ Ignored and counted (`ignored_commands`), payload consumed: 19 and 21 (DAC), 22-
 `SET_PIN_MODE` mode 7 (touch), and every id of 57 and above (in stock mode; see the extended protocol).
 
 Timing: digital inputs are polled every 2 ms while any reports, and after every command packet as upstream does (so
-a pulse written by two commands less than 2 ms apart is still reported); analog every interval (default 19 ms, floor
-10 ms); sonar one device per 33 ms in turn, echo timeout 25 ms, cm = echo_us / 58, reported only on change; DHT every 2000 ms,
+a pulse written by two commands less than 2 ms apart, even in one TCP segment, is still reported unless the socket is
+backed up; see coalescing below); analog every interval (default 19 ms, floor 10 ms); sonar one device per 33 ms in turn, echo timeout 25 ms, cm = echo_us / 58, reported only on change; DHT every 2000 ms,
 all devices, DHT22/AM2302 decoding. `DHT_NEW` registers the device and schedules its first read at once, without
 reading the other devices early (no device is read twice within 2000 ms); every failed read sends an error report and
 the device stays registered. Sonar and DHT never block the network task: a GPIO ISR
@@ -375,9 +375,9 @@ whose socket fails are closed with an RST (`SO_LINGER` 0), so no closing socket 
 an orderly end, a kick and a stop close normally. Sends are non-blocking from
 a per-connection queue; replies are never dropped. Digital and analog reports are coalesced to the latest value per pin,
 sonar and DHT to the latest reading per device: a new report replaces the same pin's (or device's) report whenever one
-is still queued unsent, not only when the queue is full, and waits for room as the latest value when there is none. So
-while the socket is backed up a fast pulse (0, 1, 0) on a digital input can reach the client as just the final 0: the
-1 is overwritten before it is sent.
+is still queued unsent, not only when the queue is full, and waits for room as the latest value when there is none.
+The server sends after every command packet, so a report stays unsent only while the socket is backed up; then a fast
+pulse (0, 1, 0) on a digital input can reach the client as just the final 0: the 1 is overwritten before it is sent.
 
 ## Sockets and memory
 
