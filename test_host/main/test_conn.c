@@ -269,14 +269,14 @@ TEST_CASE("queue of a reply with a full queue: the reply is kept in the reserve 
     conn_stop();
 }
 
-TEST_CASE("queue of a reply that fits nowhere: flush returns TMX_CONN_STALLED", "[conn]")
+TEST_CASE("queue of a reply that fits nowhere: flush returns TMX_CONN_OVERFLOW", "[conn]")
 {
     conn_start(64);
     for (int i = 0; i < 30; i++) { /* 90 bytes into a queue of 64 */
         reply_loop((uint8_t)i);
     }
     SCRIPT(0);
-    TEST_ASSERT_EQUAL(TMX_CONN_STALLED, tmx_conn_flush(&conn, 3, 0, 10000));
+    TEST_ASSERT_EQUAL(TMX_CONN_OVERFLOW, tmx_conn_flush(&conn, 3, 0, 10000));
     conn_stop();
 }
 

@@ -179,6 +179,34 @@ TEST_CASE("Digital polling: poll returns 2 ms while an input reports and UINT32_
     TEST_ASSERT_EQUAL_UINT32(2, tmx_adapter_poll(&fx_a, 12));
 }
 
+TEST_CASE("A pulse written by two packets within one poll period: both edges reported without a poll", "[adapter]")
+{
+    fx_start();
+    tmx_fake_loopback(13, 12);
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 13, 1);
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
+    fx_n_reports = 0;                       /* the first sample is checked in its own test */
+    FX_SEND(TMX_CMD_DIGITAL_WRITE, 0, 13, 1);
+    FX_SEND(TMX_CMD_DIGITAL_WRITE, 0, 13, 0);
+    TEST_ASSERT_EQUAL(2, fx_n_reports);
+    const uint8_t high[] = {3, 2, 12, 1};
+    const uint8_t low[] = {3, 2, 12, 0};
+    fx_assert_report(0, high, 4);
+    fx_assert_report(1, low, 4);
+}
+
+TEST_CASE("After STOP_ALL_REPORTS: a packet that changes an input reports nothing", "[adapter]")
+{
+    fx_start();
+    tmx_fake_loopback(13, 12);
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 13, 1);
+    FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
+    FX_SEND0(TMX_CMD_STOP_ALL_REPORTS, 0);
+    fx_n_reports = 0;
+    FX_SEND(TMX_CMD_DIGITAL_WRITE, 0, 13, 1);
+    TEST_ASSERT_EQUAL(0, fx_n_reports);
+}
+
 TEST_CASE("MODIFY_REPORTING digital disable and enable: reports stop and resume", "[adapter]")
 {
     fx_start();
@@ -203,7 +231,10 @@ TEST_CASE("MODIFY_REPORTING mode 0: silences every digital and analog pin and ig
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 13, 0, 1);
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 34, 3, 0, 0, 1);
+    fx_n_reports = 0;                       /* the first samples, reported after each SET_PIN_MODE */
     FX_SEND(TMX_CMD_MODIFY_REPORTING, 0, 0, 12);
+    tmx_fake_set_level(12, true);
+    tmx_fake_set_level(13, true);
     tmx_adapter_poll(&fx_a, 50);
     TEST_ASSERT_EQUAL(0, fx_n_reports);
     TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, tmx_adapter_poll(&fx_a, 50));
@@ -216,11 +247,14 @@ TEST_CASE("MODIFY_REPORTING mode 2 after mode 0: re-enables that digital pin onl
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 13, 0, 1);
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 34, 3, 0, 0, 1);
+    fx_n_reports = 0;                       /* the first samples, reported after each SET_PIN_MODE */
     FX_SEND(TMX_CMD_MODIFY_REPORTING, 0, 0, 0);
     FX_SEND(TMX_CMD_MODIFY_REPORTING, 0, 2, 13);
+    tmx_fake_set_level(12, true);
+    tmx_fake_set_level(13, true);
     tmx_adapter_poll(&fx_a, 2);
     tmx_adapter_poll(&fx_a, 19);
-    const uint8_t want[] = {3, 2, 13, 0};
+    const uint8_t want[] = {3, 2, 13, 1};
     TEST_ASSERT_EQUAL(1, fx_n_reports);
     fx_assert_report(0, want, 4);
 }
@@ -229,8 +263,10 @@ TEST_CASE("ENABLE_ALL_REPORTS after MODIFY_REPORTING mode 0: does not re-enable 
 {
     fx_start();
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
+    fx_n_reports = 0;                       /* the first sample */
     FX_SEND(TMX_CMD_MODIFY_REPORTING, 0, 0, 0);
     FX_SEND0(TMX_CMD_ENABLE_ALL_REPORTS, 0);
+    tmx_fake_set_level(12, true);
     tmx_adapter_poll(&fx_a, 50);
     TEST_ASSERT_EQUAL(0, fx_n_reports);
 }
@@ -251,6 +287,7 @@ TEST_CASE("STOP_ALL_REPORTS: no digital report until ENABLE_ALL_REPORTS", "[adap
 {
     fx_start();
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
+    fx_n_reports = 0;                       /* the first sample */
     FX_SEND0(TMX_CMD_STOP_ALL_REPORTS, 0);
     tmx_fake_set_level(12, true);
     TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, tmx_adapter_poll(&fx_a, 100));
@@ -306,6 +343,7 @@ TEST_CASE("release (disconnect): same release and reporting enabled for the next
     fx_start();
     FX_SEND(TMX_CMD_SET_PIN_MODE, 0, 12, 0, 1);
     FX_SEND0(TMX_CMD_STOP_ALL_REPORTS, 0);
+    fx_n_reports = 0;                       /* the first sample of this session */
     tmx_adapter_release(&fx_a);
     TEST_ASSERT_EQUAL(TMX_USE_NONE, tmx_pin_use(&fx_a.claims, 12));
     TEST_ASSERT_FALSE(tmx_adapter_reset_requested(&fx_a));

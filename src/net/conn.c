@@ -210,7 +210,7 @@ static void prune_keyed(tmx_conn_t *c)
 tmx_conn_state_t tmx_conn_flush(tmx_conn_t *c, int fd, uint32_t now_ms, uint16_t stall_ms)
 {
     if (c->broken) {
-        return TMX_CONN_STALLED;
+        return TMX_CONN_OVERFLOW;
     }
     drain_pending(c);
     while (c->head < c->tail) {

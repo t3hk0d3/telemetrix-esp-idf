@@ -200,7 +200,7 @@ static void extended_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload
     }
 }
 
-void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms)
+static void dispatch(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms)
 {
     if (a->session.extended) {
         extended_packet(a, id, payload, len, now_ms);
@@ -210,4 +210,14 @@ void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, si
         return;
     }
     tmx_adapter_stock_refusal(a, id, payload, tmx_adapter_command(a, id, payload, len, now_ms));
+}
+
+void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms)
+{
+    dispatch(a, id, payload, len, now_ms);
+    /* upstream scans the digital inputs after every command: a pulse written by two commands closer together than
+     * the 2 ms poll is still seen */
+    if (a->reporting && !a->session.violation) {
+        tmx_digital_scan(a);
+    }
 }

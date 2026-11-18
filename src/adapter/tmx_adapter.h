@@ -139,7 +139,9 @@ telemetrix_reason_t tmx_adapter_command(tmx_adapter_t *a, uint8_t id, const uint
  *  Extended mode: ids above 60 are a violation (nothing runs, nothing is queued); any other packet is numbered and,
  *  unless a refusal earlier in the batch skips it, dispatched; a refusal is exactly one ERROR report queued as a
  *  reply, counted in error_reports (and refused_commands, except NOT_IN_SCOPE). PLUGIN (60) goes to the plugin in its
- *  slot, whose PLUGIN refusal adds its code to the ERROR; GET_CAPABILITIES (59) is tmx_discovery_command. */
+ *  slot, whose PLUGIN refusal adds its code to the ERROR; GET_CAPABILITIES (59) is tmx_discovery_command.
+ *  After every packet (both modes, reporting on, no violation) the reporting digital inputs are scanned, as upstream
+ *  does after every command; the 2 ms poll covers the time between packets. */
 void tmx_adapter_packet(tmx_adapter_t *a, uint8_t id, const uint8_t *payload, size_t len, uint32_t now_ms);
 /** Run the scans that are due and, during an extended session, the plugin poll hooks that are due or woken (timed
  *  against cfg.plugin_budget_us); return the milliseconds until the next deadline, UINT32_MAX when none. */

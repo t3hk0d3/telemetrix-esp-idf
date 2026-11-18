@@ -112,7 +112,8 @@ has released everything), `connected(peer, ctx)`, `disconnected(ctx)`.
 
 **Status**: `telemetrix_get_status` returns whether the server runs and listens, the client's address, the counters
 `refused_connections`, `dropped_packets`, `ignored_commands`, `refused_commands`, `coalesced_reports`,
-`stalled_clients`, and what each claimed pin is used for. For the extended protocol: whether the client is in
+`stalled_clients` (dropped after `send_stall_ms` without send progress), `overflowed_clients` (dropped because a reply
+did not fit the send queue, `send_queue_bytes`), and what each claimed pin is used for. For the extended protocol: whether the client is in
 extended mode (`extended`), `protocol_violations`, `error_reports`, and per plugin (`plugins`, `n_plugins`) its name,
 slot, `commands`, `refusals`, `overruns`, `max_us`, `async_dropped` and its status text. `telemetrix_kick_client` drops
 the current client.
@@ -169,8 +170,9 @@ Periodic reports: digital `[3,2,pin,v]` and analog `[4,3,pin,v_hi,v_lo]` (raw 12
 Ignored and counted (`ignored_commands`), payload consumed: 19 and 21 (DAC), 22-26 (SPI), 36-56 (steppers),
 `SET_PIN_MODE` mode 7 (touch), and every id of 57 and above (in stock mode; see the extended protocol).
 
-Timing: digital inputs are polled every 2 ms while any reports; analog every interval (default 19 ms, floor 10 ms);
-sonar one device per 33 ms in turn, echo timeout 25 ms, cm = echo_us / 58, reported only on change; DHT every 2000 ms,
+Timing: digital inputs are polled every 2 ms while any reports, and after every command packet as upstream does (so
+a pulse written by two commands less than 2 ms apart, even in one TCP segment, is still reported unless the socket is
+backed up; see coalescing below); analog every interval (default 19 ms, floor 10 ms); sonar one device per 33 ms in turn, echo timeout 25 ms, cm = echo_us / 58, reported only on change; DHT every 2000 ms,
 all devices, DHT22/AM2302 decoding. `DHT_NEW` registers the device and schedules its first read at once, without
 reading the other devices early (no device is read twice within 2000 ms); every failed read sends an error report and
 the device stays registered. Sonar and DHT never block the network task: a GPIO ISR
@@ -299,9 +301,10 @@ it with `PLUGIN [slot, sub, args...]`, and the plugin answers with PLUGIN_REPORT
   or duplicate plugin name, or too many plugins or names; `ESP_ERR_NOT_SUPPORTED` for plugins with
   `CONFIG_TELEMETRIX_EXTENDED` off.
 - Every call into a plugin (command, poll, release) runs on the network task, on its stack of
-  `config.task_stack_bytes` (default 6144). `ESP_LOGx` alone can take 1.5-2.5 KB of stack on Xtensa; the free stack
-  left at the plugin call is unmeasured (to be measured in the board pass), so raise `task_stack_bytes` for plugins with
-  deep calls or large locals.
+  `config.task_stack_bytes` (default 6144). `ESP_LOGx` alone can take 1.5-2.5 KB of stack on Xtensa. Measured on an
+  ESP32 (ESP32-POE-ISO, Ethernet, default config): about 5.4 KB of the 6144 is free when a plugin command is called, and
+  the task never went below 4.3 KB free in a full test session with a plugin that logs. Raise `task_stack_bytes` for
+  plugins with deep calls or large locals.
 - A command handler returns NONE, or a refusal reason from `NO_SUCH_PIN` to `NO_SUCH_SLOT` (with its own code for
   `PLUGIN`). `SKIPPED` (the server's own) and values outside the reasons are sent as `PLUGIN` with code 0.
 - Command and poll calls are timed against
@@ -372,9 +375,9 @@ whose socket fails are closed with an RST (`SO_LINGER` 0), so no closing socket 
 an orderly end, a kick and a stop close normally. Sends are non-blocking from
 a per-connection queue; replies are never dropped. Digital and analog reports are coalesced to the latest value per pin,
 sonar and DHT to the latest reading per device: a new report replaces the same pin's (or device's) report whenever one
-is still queued unsent, not only when the queue is full, and waits for room as the latest value when there is none. So
-while the socket is backed up a fast pulse (0, 1, 0) on a digital input can reach the client as just the final 0: the
-1 is overwritten before it is sent.
+is still queued unsent, not only when the queue is full, and waits for room as the latest value when there is none.
+The server sends after every command packet, so a report stays unsent only while the socket is backed up; then a fast
+pulse (0, 1, 0) on a digital input can reach the client as just the final 0: the 1 is overwritten before it is sent.
 
 ## Sockets and memory
 

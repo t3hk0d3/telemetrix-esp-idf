@@ -42,6 +42,7 @@ struct tmx_server {
 
     uint32_t refused_connections;
     uint32_t stalled_clients;
+    uint32_t overflowed_clients;
     uint32_t protocol_violations;
     uint32_t dropped_before;            /**< dropped packets of earlier clients */
     char peer[TELEMETRIX_PEER_MAX];
@@ -271,6 +272,7 @@ static void build_status(const tmx_server_t *s, telemetrix_status_t *st)
     tmx_adapter_counters(&s->adapter, &st->ignored_commands, &st->refused_commands);
     st->coalesced_reports = s->conn.coalesced;
     st->stalled_clients = s->stalled_clients;
+    st->overflowed_clients = s->overflowed_clients;
     st->n_pins = tmx_adapter_pin_uses(&s->adapter, st->pins, sizeof(st->pins) / sizeof(st->pins[0]));
     st->extended = tmx_adapter_extended(&s->adapter);
     st->protocol_violations = s->protocol_violations;
@@ -313,6 +315,12 @@ static void packet_cb(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
         if (s->hooks.reset) {
             s->hooks.reset(s->hooks.ctx);
         }
+    }
+    /* send what this packet produced before the next one runs: a keyed report is only replaced while the socket is
+     * backed up, so a pulse written by two packets of one chunk keeps both edges; the loop acts on the state */
+    if (tmx_conn_pending(&s->conn) > 0) {
+        /* a fresh time: s->now is the start of the chunk, and stall_since must not predate this progress */
+        (void)tmx_conn_flush(&s->conn, s->client, now_ms(), s->cfg.send_stall_ms);
     }
 }
 
@@ -440,6 +448,9 @@ void tmx_server_task(void *arg)
             } else if (st == TMX_CONN_STALLED) {
                 s->stalled_clients++;
                 why = "peer stopped reading";
+            } else if (st == TMX_CONN_OVERFLOW) {
+                s->overflowed_clients++;
+                why = "a reply did not fit the send queue";
             } else if (st == TMX_CONN_ERROR) {
                 why = "send failed";
             } else if (s->kick) {
