@@ -319,7 +319,8 @@ static void packet_cb(uint8_t id, const uint8_t *payload, size_t len, void *ctx)
     /* send what this packet produced before the next one runs: a keyed report is only replaced while the socket is
      * backed up, so a pulse written by two packets of one chunk keeps both edges; the loop acts on the state */
     if (tmx_conn_pending(&s->conn) > 0) {
-        (void)tmx_conn_flush(&s->conn, s->client, s->now, s->cfg.send_stall_ms);
+        /* a fresh time: s->now is the start of the chunk, and stall_since must not predate this progress */
+        (void)tmx_conn_flush(&s->conn, s->client, now_ms(), s->cfg.send_stall_ms);
     }
 }
 
